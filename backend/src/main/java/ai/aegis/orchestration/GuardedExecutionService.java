@@ -9,6 +9,7 @@ import ai.aegis.journal.TradeJournalStore;
 import ai.aegis.market.Candle;
 import ai.aegis.ml.MlPrediction;
 import ai.aegis.ml.MlPredictionClient;
+import ai.aegis.ml.PredictionAuditService;
 import ai.aegis.paper.PaperTrade;
 import ai.aegis.paper.PaperTradingService;
 import ai.aegis.risk.RiskEngine;
@@ -34,6 +35,7 @@ public class GuardedExecutionService {
     private final PaperTradingService paperTradingService;
     private final TradeJournalStore journalStore;
     private final MlPredictionClient mlPredictionClient;
+    private final PredictionAuditService predictionAuditService;
 
     public GuardedExecutionService(DecisionCycleService decisionCycleService,
                                    TradeAdmissionService admissionService,
@@ -41,7 +43,8 @@ public class GuardedExecutionService {
                                    RiskEngine riskEngine,
                                    PaperTradingService paperTradingService,
                                    TradeJournalStore journalStore,
-                                   MlPredictionClient mlPredictionClient) {
+                                   MlPredictionClient mlPredictionClient,
+                                   PredictionAuditService predictionAuditService) {
         this.decisionCycleService = decisionCycleService;
         this.admissionService = admissionService;
         this.supervisorEngine = supervisorEngine;
@@ -49,6 +52,7 @@ public class GuardedExecutionService {
         this.paperTradingService = paperTradingService;
         this.journalStore = journalStore;
         this.mlPredictionClient = mlPredictionClient;
+        this.predictionAuditService = predictionAuditService;
     }
 
     public GuardedExecutionResult execute(GuardedExecutionRequest request) {
@@ -65,6 +69,10 @@ public class GuardedExecutionService {
         boolean mlApproved = true;
         try {
             mlPrediction = mlPredictionClient.predict(cycle.featureSnapshot());
+            String strategyId = cycle.candidateSignals().stream().filter(s -> s.eligible())
+                    .findFirst().map(s -> s.strategyId()).orElse(null);
+            predictionAuditService.record(cycle.symbol(), cycle.interval(), strategyId,
+                    cycle.finalDirection(), mlPrediction, cycle.featureSnapshot());
             if ("WAIT".equals(mlPrediction.decision())) {
                 reasons.add("ML model is neutral; rules remain primary");
             } else if (!mlPrediction.decision().equals(cycle.finalDirection())) {
@@ -76,7 +84,7 @@ public class GuardedExecutionService {
                         + " at confidence " + mlPrediction.confidence());
             }
         } catch (RuntimeException unavailable) {
-            reasons.add("ML service unavailable; fail-safe rule engine remains active");
+            reasons.add("ML service or prediction audit unavailable; fail-safe rule engine remains active");
         }
 
         if ("WAIT".equals(cycle.finalDirection()) || !"VALID".equals(riskPlan.status())) {
@@ -104,6 +112,7 @@ public class GuardedExecutionService {
         indicators.put("atr", atr);
         if (mlPrediction != null) {
             indicators.put("mlLongProbability", mlPrediction.longProbability());
+            indicators.put("mlWaitProbability", mlPrediction.waitProbability());
             indicators.put("mlShortProbability", mlPrediction.shortProbability());
             indicators.put("mlConfidence", mlPrediction.confidence());
         }
