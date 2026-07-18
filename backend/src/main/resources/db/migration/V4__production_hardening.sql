@@ -1,3 +1,5 @@
+CREATE SCHEMA IF NOT EXISTS execution;
+
 CREATE TABLE IF NOT EXISTS intelligence.model_registry (
     id UUID PRIMARY KEY,
     model_name VARCHAR(120) NOT NULL,
