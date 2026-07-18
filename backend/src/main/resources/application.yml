@@ -14,14 +14,41 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+logging:
+  level:
+    root: INFO
+    ai.aegis: ${AEGIS_LOG_LEVEL:INFO}
+  pattern:
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
 
 aegis:
+  security:
+    viewer-key: ${AEGIS_VIEWER_API_KEY:local-viewer-change-me}
+    admin-key: ${AEGIS_ADMIN_API_KEY:local-admin-change-me}
   binance:
     enabled: ${BINANCE_INGESTION_ENABLED:true}
     stream-url: ${BINANCE_STREAM_URL:wss://stream.binance.com:9443/ws/btcusdt@kline_1m}
+  ml:
+    base-url: ${ML_BASE_URL:http://localhost:8000}
+    label-horizon-minutes: ${ML_LABEL_HORIZON_MINUTES:15}
+    neutral-return-threshold: ${ML_NEUTRAL_RETURN_THRESHOLD:0.001}
+    label-delay-ms: ${ML_LABEL_DELAY_MS:60000}
+  execution:
+    live-enabled: ${AEGIS_LIVE_EXECUTION_ENABLED:false}
+    confirmation-token: ${AEGIS_EXECUTION_CONFIRMATION_TOKEN:DISABLED}
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
