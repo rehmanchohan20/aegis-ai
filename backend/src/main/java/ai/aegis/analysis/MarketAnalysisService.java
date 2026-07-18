@@ -74,7 +74,7 @@ public class MarketAnalysisService {
         }
 
         score = Math.max(0, Math.min(100, score));
-        String decision = score >= 65 ? "LONG" : score <= 35 ? "SHORT" : "WAIT";
+        String decision = score >= 65 ? "LONG" : score <= 40 ? "SHORT" : "WAIT";
         String grade = score >= 85 ? "A+" : score >= 75 ? "A" : score >= 65 ? "B" : score >= 45 ? "C" : "D";
         BigDecimal confidence = BigDecimal.valueOf(Math.abs(score - 50) * 2L)
                 .min(BigDecimal.valueOf(95));
