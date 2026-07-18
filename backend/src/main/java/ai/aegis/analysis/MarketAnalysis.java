@@ -1,5 +1,7 @@
 package ai.aegis.analysis;
 
+import ai.aegis.risk.RiskPlan;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -13,6 +15,7 @@ public record MarketAnalysis(
         String grade,
         BigDecimal confidence,
         Map<String, BigDecimal> indicators,
+        RiskPlan risk,
         List<String> reasons,
         Instant generatedAt
 ) {
