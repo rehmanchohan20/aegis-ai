@@ -6,12 +6,14 @@ import ai.aegis.paper.PaperTradingService;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class PaperTradeMonitoringServiceTest {
 
@@ -19,6 +21,7 @@ class PaperTradeMonitoringServiceTest {
     void closesTargetHitAndPersistsJournal() {
         PaperTradingService paper = new PaperTradingService();
         TradeJournalStore journal = mock(TradeJournalStore.class);
+        when(journal.latest(1000)).thenReturn(List.of());
         PaperTrade trade = paper.open("BTCUSDT", "1m", "LONG",
                 new BigDecimal("100"), new BigDecimal("95"),
                 new BigDecimal("110"), BigDecimal.ONE);
