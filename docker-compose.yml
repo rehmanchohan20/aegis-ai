@@ -23,6 +23,16 @@ services:
     volumes:
       - redis-data:/data
 
+  ml-service:
+    build:
+      context: ./ml-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ml-models:/app/models
+    restart: unless-stopped
+
 volumes:
   timescale-data:
   redis-data:
+  ml-models:
