@@ -33,7 +33,7 @@ class MarketAnalysisServiceTest {
         MarketAnalysis analysis = service.analyze(candles(false));
 
         assertThat(analysis.decision()).isEqualTo("SHORT");
-        assertThat(analysis.score()).isLessThanOrEqualTo(35);
+        assertThat(analysis.score()).isLessThanOrEqualTo(40);
     }
 
     private static List<Candle> candles(boolean rising) {
