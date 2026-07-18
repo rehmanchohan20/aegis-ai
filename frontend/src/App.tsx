@@ -1,60 +1,39 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CandleChart } from './CandleChart';
 
-type RiskPlan = {
-  entry: number | null;
-  stopLoss: number | null;
-  takeProfit1: number | null;
-  takeProfit2: number | null;
-  riskReward: number;
-  riskPercent: number;
-  status: string;
-};
-
-type Analysis = {
-  symbol: string;
-  interval: string;
-  decision: string;
-  score: number;
-  grade: string;
-  confidence: number;
-  indicators: Record<string, number>;
-  risk: RiskPlan;
-  reasons: string[];
-};
-
-type Candle = {
-  openTime: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
+type RiskPlan = { entry: number | null; stopLoss: number | null; takeProfit1: number | null; takeProfit2: number | null; riskReward: number; riskPercent: number; status: string; };
+type Analysis = { symbol: string; interval: string; decision: string; score: number; grade: string; confidence: number; indicators: Record<string, number>; risk: RiskPlan; reasons: string[]; };
+type Candle = { openTime: string; open: number; high: number; low: number; close: number; volume: number; };
+type ModelVersion = { modelName: string; version: string; status: string; metrics: Record<string, unknown>; createdAt: string; activatedAt: string | null; };
+type StrategyPerformance = { strategyId: string; trades: number; netPnl: number; averagePnl: number; winRate: number; };
+type Insights = { activeModel: ModelVersion | null; strategies: StrategyPerformance[]; labelledExamples: number; unlabelledExamples: number; };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
+const API_KEY = import.meta.env.VITE_AEGIS_API_KEY ?? 'local-viewer-change-me';
 const SYMBOL = 'BTCUSDT';
 const INTERVAL = '1m';
+const authHeaders = { 'X-AEGIS-API-KEY': API_KEY };
 
 export default function App() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [insights, setInsights] = useState<Insights | null>(null);
   const [status, setStatus] = useState('Connecting to market engine…');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [analysisResponse, candlesResponse] = await Promise.all([
-          fetch(`${API_BASE}/api/v1/analysis/latest?symbol=${SYMBOL}&interval=${INTERVAL}`),
-          fetch(`${API_BASE}/api/v1/candles?symbol=${SYMBOL}&interval=${INTERVAL}&limit=200`),
+        const [analysisResponse, candlesResponse, insightsResponse] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/analysis/latest?symbol=${SYMBOL}&interval=${INTERVAL}`, { headers: authHeaders }),
+          fetch(`${API_BASE}/api/v1/candles?symbol=${SYMBOL}&interval=${INTERVAL}&limit=200`, { headers: authHeaders }),
+          fetch(`${API_BASE}/api/v1/insights`, { headers: authHeaders }),
         ]);
 
         if (!candlesResponse.ok) throw new Error(`Candle API returned ${candlesResponse.status}`);
         const rawCandles = await candlesResponse.json();
         setCandles(rawCandles.map((c: Record<string, unknown>) => ({
-          ...c,
-          open: Number(c.open), high: Number(c.high), low: Number(c.low),
+          ...c, open: Number(c.open), high: Number(c.high), low: Number(c.low),
           close: Number(c.close), volume: Number(c.volume),
         })));
 
@@ -66,6 +45,7 @@ export default function App() {
           setAnalysis(await analysisResponse.json());
           setStatus('Live engine connected');
         }
+        if (insightsResponse.ok) setInsights(await insightsResponse.json());
         setLastUpdated(new Date());
       } catch (error) {
         setStatus(error instanceof Error ? error.message : 'Unable to reach backend');
@@ -90,81 +70,48 @@ export default function App() {
   return (
     <main className="shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">AEGIS AI</p>
-          <h1>Trading Intelligence Command Center</h1>
-          <p className="subtitle">Multi-factor confirmation, explainable decisions and capital-first risk control.</p>
-        </div>
-        <div className="connection-block">
-          <span className="live">● {status}</span>
-          <small>{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Waiting for first update'}</small>
-        </div>
+        <div><p className="eyebrow">AEGIS AI</p><h1>Trading Intelligence Command Center</h1><p className="subtitle">Multi-factor confirmation, explainable decisions and capital-first risk control.</p></div>
+        <div className="connection-block"><span className="live">● {status}</span><small>{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Waiting for first update'}</small></div>
       </header>
 
       <section className="hero-grid">
         <article className="panel chart-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">{SYMBOL} · {INTERVAL}</p>
-              <h2>Live market structure</h2>
-            </div>
-            <div className="price-block">
-              <strong>{analysis ? `$${analysis.indicators.price.toLocaleString()}` : '$—'}</strong>
-              <span>{candles.length} candles loaded</span>
-            </div>
-          </div>
+          <div className="panel-heading"><div><p className="eyebrow">{SYMBOL} · {INTERVAL}</p><h2>Live market structure</h2></div><div className="price-block"><strong>{analysis ? `$${analysis.indicators.price.toLocaleString()}` : '$—'}</strong><span>{candles.length} candles loaded</span></div></div>
           <CandleChart candles={candles} />
         </article>
-
         <aside className="panel intelligence-panel">
-          <div className="panel-heading compact">
-            <div><p className="eyebrow">Decision Engine v2</p><h2>Market state</h2></div>
-            <span className={`grade grade-${analysis?.grade?.replace('+', 'plus') ?? 'none'}`}>{analysis?.grade ?? '—'}</span>
-          </div>
-          <div className="metric-list">
-            {metrics.map(([label, value]) => (
-              <div className="metric" key={label}><span>{label}</span><strong>{value}</strong></div>
-            ))}
-          </div>
-          <div className={`signal-card signal-${analysis?.decision?.toLowerCase() ?? 'wait'}`}>
-            <span>Current decision · Score {analysis?.score ?? '—'}/100</span>
-            <strong>{analysis?.decision ?? 'WAIT'}</strong>
-            <p>{analysis?.reasons?.[0] ?? 'No trade is shown until the engine has enough validated market data.'}</p>
-          </div>
+          <div className="panel-heading compact"><div><p className="eyebrow">Decision Engine v2</p><h2>Market state</h2></div><span className={`grade grade-${analysis?.grade?.replace('+', 'plus') ?? 'none'}`}>{analysis?.grade ?? '—'}</span></div>
+          <div className="metric-list">{metrics.map(([label, value]) => <div className="metric" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
+          <div className={`signal-card signal-${analysis?.decision?.toLowerCase() ?? 'wait'}`}><span>Current decision · Score {analysis?.score ?? '—'}/100</span><strong>{analysis?.decision ?? 'WAIT'}</strong><p>{analysis?.reasons?.[0] ?? 'No trade is shown until the engine has enough validated market data.'}</p></div>
         </aside>
       </section>
 
       <section className="lower-grid">
+        <article className="panel"><p className="eyebrow">Risk Engine</p><h2>Structured trade plan</h2><div className="risk-grid">{[['Entry', risk?.entry], ['Stop loss', risk?.stopLoss], ['Take profit 1', risk?.takeProfit1], ['Take profit 2', risk?.takeProfit2], ['Risk %', risk?.riskPercent], ['R:R', risk?.riskReward]].map(([label, value]) => <div className="risk-item" key={label as string}><span>{label}</span><strong>{value == null ? '—' : Number(value).toFixed(label === 'Risk %' ? 2 : 4)}</strong></div>)}</div><div className={`risk-status risk-${risk?.status?.toLowerCase() ?? 'no_trade'}`}>{risk?.status ?? 'NO_TRADE'}</div></article>
+        <article className="panel"><p className="eyebrow">Explainability</p><h2>Why the engine decided this</h2><ol className="reason-list">{(analysis?.reasons ?? ['Waiting for sufficient live data.']).map(reason => <li key={reason}>{reason}</li>)}</ol></article>
+      </section>
+
+      <section className="lower-grid">
         <article className="panel">
-          <p className="eyebrow">Risk Engine</p>
-          <h2>Structured trade plan</h2>
-          <div className="risk-grid">
-            {[
-              ['Entry', risk?.entry], ['Stop loss', risk?.stopLoss],
-              ['Take profit 1', risk?.takeProfit1], ['Take profit 2', risk?.takeProfit2],
-              ['Risk %', risk?.riskPercent], ['R:R', risk?.riskReward],
-            ].map(([label, value]) => (
-              <div className="risk-item" key={label as string}>
-                <span>{label}</span>
-                <strong>{value == null ? '—' : Number(value).toFixed(label === 'Risk %' ? 2 : 4)}</strong>
-              </div>
-            ))}
-          </div>
-          <div className={`risk-status risk-${risk?.status?.toLowerCase() ?? 'no_trade'}`}>
-            {risk?.status ?? 'NO_TRADE'}
+          <p className="eyebrow">ML Operations</p><h2>Active production model</h2>
+          <div className="metric-list">
+            <div className="metric"><span>Model</span><strong>{insights?.activeModel?.modelName ?? 'No active model'}</strong></div>
+            <div className="metric"><span>Version</span><strong>{insights?.activeModel?.version ?? '—'}</strong></div>
+            <div className="metric"><span>Status</span><strong>{insights?.activeModel?.status ?? 'CANDIDATE ONLY'}</strong></div>
+            <div className="metric"><span>Labelled examples</span><strong>{insights?.labelledExamples ?? 0}</strong></div>
+            <div className="metric"><span>Pending labels</span><strong>{insights?.unlabelledExamples ?? 0}</strong></div>
           </div>
         </article>
-
         <article className="panel">
-          <p className="eyebrow">Explainability</p>
-          <h2>Why the engine decided this</h2>
-          <ol className="reason-list">
-            {(analysis?.reasons ?? ['Waiting for sufficient live data.']).map((reason) => <li key={reason}>{reason}</li>)}
-          </ol>
+          <p className="eyebrow">Strategy Attribution</p><h2>Realized performance</h2>
+          <div className="metric-list">
+            {(insights?.strategies ?? []).slice(0, 6).map(strategy => <div className="metric" key={strategy.strategyId}><span>{strategy.strategyId} · {strategy.trades} trades · {Number(strategy.winRate).toFixed(1)}% win</span><strong>{Number(strategy.netPnl).toFixed(2)}</strong></div>)}
+            {!insights?.strategies?.length && <div className="metric"><span>No closed attributed trades yet</span><strong>—</strong></div>}
+          </div>
         </article>
       </section>
 
-      <footer>Research and decision-support software only. No return is guaranteed; risk controls remain mandatory.</footer>
+      <footer>Research and decision-support software only. Live exchange execution is fail-closed and disabled by default.</footer>
     </main>
   );
 }
