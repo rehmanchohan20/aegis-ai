@@ -24,12 +24,15 @@ public class ModelRegistryService {
 
     public ModelVersion register(String modelName, String version, Map<String, Object> metrics,
                                  String artifactUri, List<String> featureNames) {
+        if (modelName == null || modelName.isBlank() || version == null || version.isBlank())
+            throw new IllegalArgumentException("modelName and version are required");
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO intelligence.model_registry
                 (id, model_name, version, status, metrics, artifact_uri, feature_names, created_at)
                 VALUES (?, ?, ?, 'CANDIDATE', ?::jsonb, ?, ?::jsonb, ?)
-                """, id, modelName, version, json(metrics), artifactUri, json(featureNames), Timestamp.from(Instant.now()));
+                """, id, modelName, version, json(metrics == null ? Map.of() : metrics), artifactUri,
+                json(featureNames == null ? List.of() : featureNames), Timestamp.from(Instant.now()));
         return get(id);
     }
 
@@ -46,10 +49,10 @@ public class ModelRegistryService {
 
     @Transactional
     public ModelVersion rollback(String modelName, String version) {
-        UUID id = jdbc.queryForObject("SELECT id FROM intelligence.model_registry WHERE model_name=? AND version=?",
-                UUID.class, modelName, version);
-        if (id == null) throw new IllegalArgumentException("Model version not found");
-        return activate(id);
+        List<UUID> ids = jdbc.query("SELECT id FROM intelligence.model_registry WHERE model_name=? AND version=?",
+                (rs, n) -> UUID.fromString(rs.getString("id")), modelName, version);
+        if (ids.isEmpty()) throw new IllegalArgumentException("Model version not found");
+        return activate(ids.getFirst());
     }
 
     public ModelVersion active(String modelName) {
@@ -64,15 +67,21 @@ public class ModelRegistryService {
     }
 
     public ModelVersion get(UUID id) {
-        return jdbc.queryForObject("SELECT * FROM intelligence.model_registry WHERE id=?", (rs, n) -> map(rs), id);
+        List<ModelVersion> rows = jdbc.query("SELECT * FROM intelligence.model_registry WHERE id=?",
+                (rs, n) -> map(rs), id);
+        if (rows.isEmpty()) throw new IllegalArgumentException("Model version not found");
+        return rows.getFirst();
     }
 
     private boolean approved(UUID id) {
-        Boolean value = jdbc.queryForObject("SELECT approved FROM intelligence.deployment_approval WHERE model_id=? ORDER BY evaluated_at DESC LIMIT 1",
-                Boolean.class, id);
-        return Boolean.TRUE.equals(value);
+        List<Boolean> values = jdbc.query("""
+                SELECT approved FROM intelligence.deployment_approval
+                WHERE model_id=? ORDER BY evaluated_at DESC LIMIT 1
+                """, (rs, n) -> rs.getBoolean("approved"), id);
+        return !values.isEmpty() && Boolean.TRUE.equals(values.getFirst());
     }
 
+    @SuppressWarnings("unchecked")
     private ModelVersion map(java.sql.ResultSet rs) throws java.sql.SQLException {
         try {
             return new ModelVersion(UUID.fromString(rs.getString("id")), rs.getString("model_name"),
