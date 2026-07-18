@@ -7,6 +7,8 @@ import ai.aegis.analysis.MarketAnalysis;
 import ai.aegis.journal.TradeJournalEntry;
 import ai.aegis.journal.TradeJournalStore;
 import ai.aegis.market.Candle;
+import ai.aegis.ml.MlPrediction;
+import ai.aegis.ml.MlPredictionClient;
 import ai.aegis.paper.PaperTrade;
 import ai.aegis.paper.PaperTradingService;
 import ai.aegis.risk.RiskEngine;
@@ -31,19 +33,22 @@ public class GuardedExecutionService {
     private final RiskEngine riskEngine;
     private final PaperTradingService paperTradingService;
     private final TradeJournalStore journalStore;
+    private final MlPredictionClient mlPredictionClient;
 
     public GuardedExecutionService(DecisionCycleService decisionCycleService,
                                    TradeAdmissionService admissionService,
                                    SupervisorEngine supervisorEngine,
                                    RiskEngine riskEngine,
                                    PaperTradingService paperTradingService,
-                                   TradeJournalStore journalStore) {
+                                   TradeJournalStore journalStore,
+                                   MlPredictionClient mlPredictionClient) {
         this.decisionCycleService = decisionCycleService;
         this.admissionService = admissionService;
         this.supervisorEngine = supervisorEngine;
         this.riskEngine = riskEngine;
         this.paperTradingService = paperTradingService;
         this.journalStore = journalStore;
+        this.mlPredictionClient = mlPredictionClient;
     }
 
     public GuardedExecutionResult execute(GuardedExecutionRequest request) {
@@ -55,6 +60,24 @@ public class GuardedExecutionService {
         BigDecimal normalizedAtr = cycle.featureSnapshot().usableValue("atrNormalized14").orElse(BigDecimal.ZERO);
         BigDecimal atr = entry.multiply(normalizedAtr);
         RiskPlan riskPlan = riskEngine.build(cycle.finalDirection(), entry, atr);
+
+        MlPrediction mlPrediction = null;
+        boolean mlApproved = true;
+        try {
+            mlPrediction = mlPredictionClient.predict(cycle.featureSnapshot());
+            if ("WAIT".equals(mlPrediction.decision())) {
+                reasons.add("ML model is neutral; rules remain primary");
+            } else if (!mlPrediction.decision().equals(cycle.finalDirection())) {
+                mlApproved = false;
+                reasons.add("ML veto: model direction " + mlPrediction.decision()
+                        + " conflicts with rules direction " + cycle.finalDirection());
+            } else {
+                reasons.add("ML confirmation: " + mlPrediction.model() + " agrees with " + cycle.finalDirection()
+                        + " at confidence " + mlPrediction.confidence());
+            }
+        } catch (RuntimeException unavailable) {
+            reasons.add("ML service unavailable; fail-safe rule engine remains active");
+        }
 
         if ("WAIT".equals(cycle.finalDirection()) || !"VALID".equals(riskPlan.status())) {
             reasons.add("Risk plan did not produce a tradable setup");
@@ -79,12 +102,17 @@ public class GuardedExecutionService {
         Map<String, BigDecimal> indicators = new LinkedHashMap<>();
         indicators.put("price", entry);
         indicators.put("atr", atr);
+        if (mlPrediction != null) {
+            indicators.put("mlLongProbability", mlPrediction.longProbability());
+            indicators.put("mlShortProbability", mlPrediction.shortProbability());
+            indicators.put("mlConfidence", mlPrediction.confidence());
+        }
         cycle.featureSnapshot().features().forEach((name, feature) -> {
             if (feature.usable()) indicators.put(name, feature.value());
         });
         MarketAnalysis analysis = new MarketAnalysis(cycle.symbol(), cycle.interval(), cycle.finalDirection(),
                 cycle.finalScore(), grade(cycle.finalScore()), BigDecimal.valueOf(cycle.finalScore()),
-                Map.copyOf(indicators), riskPlan, cycle.reasons(), Instant.now());
+                Map.copyOf(indicators), riskPlan, List.copyOf(reasons), Instant.now());
 
         TradeAdmissionDecision admission = admissionService.evaluate(new TradeAdmissionRequest(
                 analysis, request.candles(), request.accountBalance(), quantity,
@@ -95,7 +123,8 @@ public class GuardedExecutionService {
         reasons.addAll(admission.blockers());
 
         SupervisorDecision supervisor = supervisorEngine.decide(cycle.featureSnapshot(), cycle.candidateSignals(),
-                request.riskApproved() && admission.approved(), request.strategyHealthy(), request.executionHealthy());
+                request.riskApproved() && admission.approved() && mlApproved,
+                request.strategyHealthy(), request.executionHealthy());
         reasons.addAll(supervisor.approvals());
         reasons.addAll(supervisor.vetoes());
 
