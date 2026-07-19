@@ -3,6 +3,7 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  createSeriesMarkers,
   HistogramSeries,
   LineSeries,
   type IChartApi,
@@ -39,6 +40,30 @@ export type MarketStructure = {
   trendLines: TrendLine[];
 };
 
+export type DirectionalSetup = {
+  status: string;
+  direction: string;
+  setupType: string;
+  probabilitySource: string;
+  expectedRMultiple: number;
+  volumeState: string;
+  confirmations: string[];
+  rejections: string[];
+  tradeQualityScore: number;
+  takeProfitHitFirstProbability: number | null;
+  fixedRangeProfile: {
+    pointOfControl: number;
+    valueAreaHigh: number;
+    valueAreaLow: number;
+    bins: Array<{ lower: number; upper: number; volumeFraction: number; nodeType: string }>;
+    developingPoc: Array<{ time: string; price: number }>;
+  };
+  entryZone: { lower: number; upper: number; basis: string } | null;
+  stopLoss: number | null;
+  takeProfitLevels: number[];
+  markers: Array<{ time: string; price: number; type: string; direction: string; label: string }>;
+};
+
 function time(value: string): UTCTimestamp {
   return Math.floor(new Date(value).getTime() / 1000) as UTCTimestamp;
 }
@@ -62,7 +87,7 @@ function vwap(candles: Candle[]): Array<{ time: UTCTimestamp; value: number }> {
   });
 }
 
-export function CandleChart({ candles, symbol, structure }: { candles: Candle[]; symbol: string; structure: MarketStructure | null }) {
+export function CandleChart({ candles, symbol, structure, setup }: { candles: Candle[]; symbol: string; structure: MarketStructure | null; setup: DirectionalSetup | null }) {
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -100,6 +125,14 @@ export function CandleChart({ candles, symbol, structure }: { candles: Candle[];
     horizontal(structure?.resistancePrice ?? null, '#ff6b7a', 2);
     horizontal(structure?.atrUpperBand ?? null, '#ffbe5c', 3);
     horizontal(structure?.atrLowerBand ?? null, '#ffbe5c', 3);
+    horizontal(setup?.fixedRangeProfile.pointOfControl ?? null, '#f6c85f', 0);
+    horizontal(setup?.fixedRangeProfile.valueAreaHigh ?? null, '#7d8ea6', 2);
+    horizontal(setup?.fixedRangeProfile.valueAreaLow ?? null, '#7d8ea6', 2);
+    horizontal(setup?.entryZone?.lower ?? null, '#3dd9b4', 3);
+    horizontal(setup?.entryZone?.upper ?? null, '#3dd9b4', 3);
+    horizontal(setup?.stopLoss ?? null, '#ff4567', 0);
+    setup?.takeProfitLevels.forEach((target) => horizontal(target, '#25d07f', 3));
+    if (setup?.fixedRangeProfile.developingPoc.length) addLine(setup.fixedRangeProfile.developingPoc.map((point) => ({ time: time(point.time), value: point.price })), '#f6c85f', 2);
     structure?.trendLines.slice(0, 8).forEach((line) => {
       const broken = line.breakStatus !== 'ACTIVE';
       addLine([
@@ -107,12 +140,21 @@ export function CandleChart({ candles, symbol, structure }: { candles: Candle[];
         { time: time(line.endTime), value: line.endPrice },
       ], broken ? '#60738e' : line.type === 'SUPPORT' ? '#55e6c1' : '#ff6b7a', line.confidenceScore >= .7 ? 2 : 1, broken ? 2 : 0);
     });
+    if (setup?.markers.length) createSeriesMarkers(price, setup.markers.map((marker) => ({
+      time: time(marker.time), position: marker.direction === 'SHORT' ? 'aboveBar' as const : 'belowBar' as const,
+      color: marker.type.includes('RETEST') ? '#f6c85f' : marker.direction === 'SHORT' ? '#ff6b7a' : '#55e6c1',
+      shape: marker.type.includes('BREAK')
+        ? marker.direction === 'SHORT' ? 'arrowDown' as const : 'arrowUp' as const
+        : 'circle' as const,
+      text: marker.label,
+    })));
     chart.timeScale().fitContent();
     const resize = new ResizeObserver(() => chart.applyOptions({ width: container.current?.clientWidth ?? 800 }));
     resize.observe(container.current);
     return () => { resize.disconnect(); chart.remove(); };
-  }, [candles, structure]);
+  }, [candles, structure, setup]);
 
   if (candles.length === 0) return <div className="chart-empty">Collecting validated candles for {symbol}...</div>;
-  return <div className="chart-wrap" ref={container} aria-label={`${symbol} candlestick chart with EMA, VWAP, ATR, support, resistance, and validated trend lines`} />;
+  const maximumProfile = Math.max(...(setup?.fixedRangeProfile.bins.map((bin) => bin.volumeFraction) ?? [1]));
+  return <div className="chart-wrap"><div className="chart-canvas" ref={container} aria-label={`${symbol} chart with directional setup and volume profile`} /><div className="volume-profile" aria-label="Fixed-range volume profile">{setup?.fixedRangeProfile.bins.map((bin) => <span key={`${bin.lower}-${bin.upper}`} className={`profile-bin ${bin.nodeType.toLowerCase()}`} style={{ width: `${Math.max(2, bin.volumeFraction / maximumProfile * 100)}%` }} title={`${bin.nodeType} ${bin.lower.toFixed(4)}-${bin.upper.toFixed(4)}`} />)}</div></div>;
 }

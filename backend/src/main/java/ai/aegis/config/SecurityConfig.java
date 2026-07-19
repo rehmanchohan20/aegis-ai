@@ -31,9 +31,12 @@ public class SecurityConfig {
                 .addFilterBefore(apiKeyFilter, AbstractPreAuthenticatedProcessingFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health", "/actuator/info", "/api/v1/public/**").permitAll()
+                        .requestMatchers("/api/v1/directional-setups/backtest").hasRole("ADMIN")
                         .requestMatchers("/api/v1/admin/**", "/api/v1/execution/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
-                .exceptionHandling(e -> e.authenticationEntryPoint((req, res, ex) -> res.sendError(401)))
+                .exceptionHandling(e -> e
+                        .authenticationEntryPoint((req, res, ex) -> res.setStatus(401))
+                        .accessDeniedHandler((req, res, ex) -> res.setStatus(403)))
                 .build();
     }
 

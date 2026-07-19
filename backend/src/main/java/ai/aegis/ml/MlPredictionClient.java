@@ -19,7 +19,7 @@ public class MlPredictionClient {
     public MlPredictionClient(RestClient.Builder builder,
                               ObjectMapper objectMapper,
                               @Value("${aegis.ml.base-url:http://localhost:8000}") String baseUrl) {
-        this.restClient = builder.baseUrl(baseUrl).build();
+        this.restClient = MlRestClientFactory.create(builder, baseUrl);
         this.objectMapper = objectMapper;
     }
 

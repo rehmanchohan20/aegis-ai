@@ -37,6 +37,14 @@ The platform is a serious multi-asset, multi-timeframe paper-trading and ML rese
 
 No fake/random runtime predictions, shuffled time-series validation, look-ahead features, hard-coded secrets, production order adapter, or real-money execution are permitted.
 
+### Directional-bias and volume-profile setup specification
+
+The platform must not predict or trade every candle. Derive higher-timeframe bias first from closed 15m/1h/4h evidence and remain neutral when 1h and 4h conflict. Search only in the bias direction for confirmed BOS plus a pullback into validated value/support/VWAP/POC/order-block evidence, breakout retest, or reclaim/rejection. Require valid data, spread, liquidity, no strong opposing order flow, at least 2.5R to a defensible liquidity target, and an approved calibrated target-first probability greater than stop-first probability.
+
+Maintain fixed-range and UTC-session volume profiles with explicitly documented kline approximation limits, POC, 70% VAH/VAL, HVN/LVN, developing POC, acceptance/rejection, and range state. Persist the complete setup snapshot and expose chart-ready profile, entry, invalidation, targets, structure labels, trade quality, and probability source. Guarded paper execution must reject orders without an actionable aligned setup.
+
+Backtest without look-ahead: higher-timeframe candles must be closed by decision time, entries may begin only at the signal-close boundary, costs and slippage must be charged, ambiguous same-candle stop/target collisions must resolve conservatively, and small samples must not be presented as profitability. Report win rate, average R, expectancy, profit factor, drawdown, and breakdowns by pair/timeframe/regime.
+
 ## Safety constraints
 
 1. Real-money order placement must remain disabled by default.

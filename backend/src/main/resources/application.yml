@@ -41,6 +41,10 @@ aegis:
   structure:
     delay-ms: ${AEGIS_STRUCTURE_DELAY_MS:15000}
     initial-delay-ms: ${AEGIS_STRUCTURE_INITIAL_DELAY_MS:20000}
+  setup:
+    timeframes: ${AEGIS_SETUP_TIMEFRAMES:1m,3m,5m,15m}
+    delay-ms: ${AEGIS_SETUP_DELAY_MS:15000}
+    initial-delay-ms: ${AEGIS_SETUP_INITIAL_DELAY_MS:30000}
   ml:
     base-url: ${ML_BASE_URL:http://localhost:8000}
     deployment-approval-token: ${AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN:DISABLED}

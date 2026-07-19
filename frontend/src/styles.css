@@ -40,8 +40,11 @@ h2 { margin-bottom: 0; }
 .compact { align-items: flex-start; }
 .price-block { display: grid; justify-items: end; gap: 5px; }
 .price-block strong { font-size: 1.45rem; }
-.chart-wrap { min-height: 500px; margin-top: 22px; overflow: hidden; border: 1px solid rgba(154,180,215,.14); border-radius: 18px; background: linear-gradient(180deg, rgba(31,72,113,.17), rgba(4,10,18,.28)); }
-.chart-wrap > div { min-height: 500px; }
+.chart-wrap { position: relative; min-height: 500px; margin-top: 22px; overflow: hidden; border: 1px solid rgba(154,180,215,.14); border-radius: 18px; background: linear-gradient(180deg, rgba(31,72,113,.17), rgba(4,10,18,.28)); }
+.chart-wrap > .chart-canvas { min-height: 500px; }
+.volume-profile { position: absolute; z-index: 2; top: 12px; right: 72px; bottom: 42px; width: 19%; display: flex; flex-direction: column-reverse; justify-content: stretch; align-items: flex-end; pointer-events: none; opacity: .36; }
+.profile-bin { display: block; flex: 1 1 0; min-height: 1px; background: #4d87b9; border-bottom: 1px solid rgba(5,11,20,.35); }
+.profile-bin.hvn { background: #55e6c1; }.profile-bin.lvn { background: #60738e; }.profile-bin.poc { background: #f6c85f; opacity: 1; }
 .chart-empty { display: grid; place-items: center; min-height: 500px; color: #8298b8; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; color: #7185a3; font-size: .72rem; }
 .chart-legend span::before { content: ''; display: inline-block; width: 16px; height: 2px; margin: 0 6px 3px 0; background: #60738e; }
@@ -72,6 +75,9 @@ h2 { margin-bottom: 0; }
 .trade-list > div:not(.empty-state) { display: flex; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid rgba(154,180,215,.12); color: #91a6c3; }
 .trade-list small { display: block; margin-top: 5px; color: #60738e; }
 .micro-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+.setup-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+.setup-strip .metric { display: grid; align-content: center; min-height: 88px; padding: 14px; border: 1px solid rgba(246,200,95,.2); border-radius: 15px; background: rgba(8,18,32,.84); }
+.setup-strip .metric span { margin-bottom: 8px; font-size: .72rem; }
 .micro-grid .metric { display: grid; align-content: center; min-height: 88px; padding: 14px; border: 1px solid rgba(154,180,215,.16); border-radius: 15px; background: rgba(8,18,32,.84); }
 .micro-grid .metric span { margin-bottom: 8px; font-size: .72rem; }
 .pair-panel { margin-top: 20px; overflow: hidden; }
@@ -98,6 +104,6 @@ button.pair-row:hover, button.pair-row.selected { background: rgba(85,230,193,.0
 .reason-list { margin: 22px 0 0; padding-left: 22px; color: #a8b8ce; }
 .reason-list li { margin-bottom: 13px; padding-left: 6px; line-height: 1.55; }
 footer { margin-top: 22px; color: #60738e; font-size: .78rem; text-align: center; }
-@media (max-width: 1180px) { .status-strip, .micro-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (max-width: 1180px) { .status-strip, .micro-grid, .setup-strip { grid-template-columns: repeat(3, minmax(0,1fr)); } }
 @media (max-width: 980px) { .hero-grid, .lower-grid { grid-template-columns: 1fr; } .status-strip { grid-template-columns: repeat(2, minmax(0,1fr)); } .topbar { align-items: flex-start; flex-direction: column; } .connection-block { justify-items: start; } }
-@media (max-width: 620px) { .shell { width: min(100% - 22px, 1440px); padding-top: 18px; } .panel { padding: 17px; border-radius: 18px; } .status-strip, .micro-grid { grid-template-columns: 1fr 1fr; } .market-toolbar { grid-template-columns: 1fr 1fr; } .market-toolbar p { grid-column: 1 / -1; justify-items: start; } .risk-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .chart-wrap, .chart-wrap > div, .chart-empty { min-height: 390px; } }
+@media (max-width: 620px) { .shell { width: min(100% - 22px, 1440px); padding-top: 18px; } .panel { padding: 17px; border-radius: 18px; } .status-strip, .micro-grid, .setup-strip { grid-template-columns: 1fr 1fr; } .market-toolbar { grid-template-columns: 1fr 1fr; } .market-toolbar p { grid-column: 1 / -1; justify-items: start; } .risk-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } .chart-wrap, .chart-wrap > .chart-canvas, .chart-empty { min-height: 390px; } .volume-profile { right: 58px; width: 16%; } }

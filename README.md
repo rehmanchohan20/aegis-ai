@@ -34,6 +34,8 @@ Copy [.env.example](.env.example) to `.env` for local Compose. Use [.env.product
 | `AEGIS_MARKET_SYMBOLS` | comma-separated stream universe | eight pairs above |
 | `AEGIS_MARKET_INTERVALS` | analysis/kline timeframes | six timeframes above |
 | `AEGIS_MARKET_SNAPSHOT_INTERVAL_MS` | snapshot/SSE cadence | `1000` |
+| `AEGIS_SETUP_TIMEFRAMES` | selective entry-search timeframes | `1m,3m,5m,15m` |
+| `AEGIS_SETUP_DELAY_MS` | setup scanner refresh delay | `15000` |
 | `BINANCE_INGESTION_ENABLED` | public market-data ingestion | `true` |
 | `AEGIS_VIEWER_API_KEY` | read APIs | local non-secret key |
 | `AEGIS_ADMIN_API_KEY` | admin/model APIs | local non-secret key |
@@ -154,6 +156,29 @@ Register the returned artifact/version through `POST /api/v1/admin/models`, eval
 
 Synthetic generation under `ml-service/scripts` exists only for deterministic tests/smoke verification; it is not used by the live runtime path and does not claim predictive quality.
 
+## Directional-bias and volume-profile setup engine
+
+The setup scanner deliberately does not predict every candle. It first derives a weighted, closed-candle-only bias from 15m, 1h, and 4h EMA separation/slope plus confirmed structure. It remains `WAIT` unless 1h and 4h agree. Only then does it look for a volume-confirmed break of structure followed by a pullback into value, a breakout retest, or a directional VWAP/value reclaim or rejection.
+
+For each configured symbol and entry timeframe it maintains:
+
+- fixed-range and UTC-session profiles, POC, 70% VAH/VAL, HVNs, LVNs, developing POC, value acceptance/rejection, and range state;
+- entry zone and basis, structure/value-buffered invalidation, liquidity-derived targets, expected R, setup quality, confirmations, rejection reasons, and data warnings;
+- strict live gates for real spread/top-book liquidity, non-stale data, no strong opposing imbalance, at least `2.5R`, and an approved calibrated model whose target-first probability exceeds both stop-first probability and 50%;
+- chart overlays for the profile, developing POC, value boundaries, entry/stop/targets, BOS/ChoCH, and retest markers.
+
+Kline data does not contain tick-level volume-at-price. The profile therefore allocates each closed candle's volume across intersecting price bins with a triangular typical-price weight and labels that approximation in every response. It must not be described as exchange-native tick volume profile.
+
+The admin-only chronological backtest starts fills no earlier than the signal candle close, uses only higher-timeframe candles already closed at the decision timestamp, searches a bounded future entry window, charges 7.5 bps per side plus 2 bps slippage, and treats same-candle stop/target collisions as stop losses. It reports win rate, average R/expectancy, profit factor, maximum R drawdown, and breakdowns by pair, timeframe, and observed structure regime. Fewer than 30 trades is explicitly marked exploratory.
+
+```powershell
+$viewer = @{ 'X-AEGIS-API-KEY' = 'local-viewer-change-me' }
+$admin = @{ 'X-AEGIS-API-KEY' = 'local-admin-change-me' }
+Invoke-RestMethod 'http://localhost:8080/api/v1/directional-setups?symbol=BTCUSDT&timeframe=5m' -Headers $viewer
+Invoke-RestMethod 'http://localhost:8080/api/v1/directional-setups/bias?symbol=BTCUSDT' -Headers $viewer
+Invoke-RestMethod -Method Post 'http://localhost:8080/api/v1/directional-setups/backtest?symbol=BTCUSDT&timeframe=5m&limit=2000' -Headers $admin
+```
+
 ## Prediction result lifecycle
 
 Each prediction stores its symbol/timeframe/strategy/model, rule/ML/final directions, calibrated LONG/WAIT/SHORT probabilities, expected return/volatility, trade-quality and path probabilities, starting price, evaluation horizon, features, regime, trend/order-flow context, and risk levels.
@@ -175,6 +200,7 @@ Read `/api/v1/predictions/summary`, `/rolling`, and `/performance`. The performa
 - `/api/v1/market-data/latest`, `/history`, `/status`, `/stream`
 - `/api/v1/market-structure`
 - `/api/v1/pair-ranking`, `/correlation`
+- `/api/v1/directional-setups`, `/bias` (viewer), `/backtest` (admin POST)
 - `/api/v1/dashboard`
 - `/api/v1/predictions`, `/summary`, `/rolling`, `/performance`
 - `/api/v1/paper-orders`, `/api/v1/paper-trades`

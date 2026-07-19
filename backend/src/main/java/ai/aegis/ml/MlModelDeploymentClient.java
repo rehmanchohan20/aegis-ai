@@ -15,7 +15,7 @@ public class MlModelDeploymentClient {
     public MlModelDeploymentClient(RestClient.Builder builder,
                                    @Value("${aegis.ml.base-url:http://localhost:8000}") String baseUrl,
                                    @Value("${aegis.ml.deployment-approval-token:DISABLED}") String approvalToken) {
-        this.client = builder.baseUrl(baseUrl).build();
+        this.client = MlRestClientFactory.create(builder, baseUrl);
         this.approvalToken = approvalToken;
     }
 

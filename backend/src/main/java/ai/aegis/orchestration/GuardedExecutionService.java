@@ -21,6 +21,8 @@ import ai.aegis.analysis.MultiTimeframeDecision;
 import ai.aegis.structure.MarketStructureService;
 import ai.aegis.structure.MarketStructureSnapshot;
 import ai.aegis.ranking.PairRankingService;
+import ai.aegis.setup.DirectionalSetup;
+import ai.aegis.setup.DirectionalSetupService;
 import ai.aegis.risk.RiskEngine;
 import ai.aegis.risk.RiskPlan;
 import ai.aegis.supervisor.SupervisorDecision;
@@ -51,6 +53,7 @@ public class GuardedExecutionService {
     private final MultiTimeframeAnalysisService multiTimeframe;
     private final MarketStructureService marketStructure;
     private final PairRankingService pairRanking;
+    private final DirectionalSetupService directionalSetups;
 
     public GuardedExecutionService(DecisionCycleService decisionCycleService,
                                    TradeAdmissionService admissionService,
@@ -64,7 +67,8 @@ public class GuardedExecutionService {
                                    MarketDataStateService marketData,
                                    MultiTimeframeAnalysisService multiTimeframe,
                                    MarketStructureService marketStructure,
-                                   PairRankingService pairRanking) {
+                                   PairRankingService pairRanking,
+                                   DirectionalSetupService directionalSetups) {
         this.decisionCycleService = decisionCycleService;
         this.admissionService = admissionService;
         this.supervisorEngine = supervisorEngine;
@@ -78,6 +82,7 @@ public class GuardedExecutionService {
         this.multiTimeframe = multiTimeframe;
         this.marketStructure = marketStructure;
         this.pairRanking = pairRanking;
+        this.directionalSetups = directionalSetups;
     }
 
     public GuardedExecutionResult execute(GuardedExecutionRequest request) {
@@ -112,6 +117,16 @@ public class GuardedExecutionService {
                 marketContextApproved = false;
                 reasons.add("Change-of-character transition blocks new directional exposure");
             }
+        }
+        DirectionalSetup directionalSetup = directionalSetups.latest(cycle.symbol(), cycle.interval());
+        if (!directionalSetup.actionable() || !cycle.finalDirection().equals(directionalSetup.direction())) {
+            marketContextApproved = false;
+            reasons.add("Directional setup engine blocks entry: " + directionalSetup.status()
+                    + " / " + String.join(", ", directionalSetup.rejections()));
+        } else {
+            reasons.add("Directional setup approved " + directionalSetup.setupType() + " at "
+                    + directionalSetup.expectedRMultiple() + "R with target-first probability "
+                    + directionalSetup.takeProfitHitFirstProbability());
         }
         BigDecimal normalizedAtr = cycle.featureSnapshot().usableValue("atrNormalized14").orElse(BigDecimal.ZERO);
         BigDecimal atr = entry.multiply(normalizedAtr);
