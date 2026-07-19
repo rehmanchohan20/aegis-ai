@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class GuardedExecutionService {
@@ -66,15 +67,18 @@ public class GuardedExecutionService {
         RiskPlan riskPlan = riskEngine.build(cycle.finalDirection(), entry, atr);
 
         MlPrediction mlPrediction = null;
+        UUID predictionId = null;
+        String strategyId = cycle.candidateSignals().stream().filter(s -> s.eligible())
+                .findFirst().map(s -> s.strategyId()).orElse(null);
         boolean mlApproved = true;
         try {
             mlPrediction = mlPredictionClient.predict(cycle.featureSnapshot());
-            String strategyId = cycle.candidateSignals().stream().filter(s -> s.eligible())
-                    .findFirst().map(s -> s.strategyId()).orElse(null);
-            predictionAuditService.record(cycle.symbol(), cycle.interval(), strategyId,
-                    cycle.finalDirection(), mlPrediction, cycle.featureSnapshot());
+            predictionId = predictionAuditService.record(cycle.symbol(), cycle.interval(), strategyId,
+                    cycle.finalDirection(), mlPrediction, cycle.featureSnapshot(), entry);
             if ("WAIT".equals(mlPrediction.decision())) {
-                reasons.add("ML model is neutral; rules remain primary");
+                reasons.add("ML model is neutral; rules remain primary"
+                        + (mlPrediction.uncertaintyStatus() == null ? ""
+                        : " (uncertainty " + mlPrediction.uncertaintyStatus() + ")"));
             } else if (!mlPrediction.decision().equals(cycle.finalDirection())) {
                 mlApproved = false;
                 reasons.add("ML veto: model direction " + mlPrediction.decision()
@@ -115,6 +119,9 @@ public class GuardedExecutionService {
             indicators.put("mlWaitProbability", mlPrediction.waitProbability());
             indicators.put("mlShortProbability", mlPrediction.shortProbability());
             indicators.put("mlConfidence", mlPrediction.confidence());
+            if (mlPrediction.confidenceMargin() != null) indicators.put("mlConfidenceMargin", mlPrediction.confidenceMargin());
+            if (mlPrediction.featureDriftScore() != null) indicators.put("mlFeatureDriftScore", mlPrediction.featureDriftScore());
+            if (mlPrediction.entropy() != null) indicators.put("mlPredictionEntropy", mlPrediction.entropy());
         }
         cycle.featureSnapshot().features().forEach((name, feature) -> {
             if (feature.usable()) indicators.put(name, feature.value());
@@ -145,10 +152,15 @@ public class GuardedExecutionService {
 
         PaperTrade trade = paperTradingService.open(cycle.symbol(), cycle.interval(), supervisor.side(),
                 riskPlan.entry(), riskPlan.stopLoss(), riskPlan.takeProfit1(), quantity);
+        Map<String, BigDecimal> probabilities = mlPrediction == null ? Map.of() : Map.of(
+                "LONG", mlPrediction.longProbability(), "WAIT", mlPrediction.waitProbability(),
+                "SHORT", mlPrediction.shortProbability());
         journalStore.save(new TradeJournalEntry(trade.id(), trade.symbol(), trade.interval(), trade.side(),
                 trade.status(), trade.entryPrice(), trade.stopLoss(), trade.takeProfit(), trade.quantity(),
                 trade.realizedPnl(), cycle.finalScore(), grade(cycle.finalScore()), String.join(" | ", reasons),
-                trade.openedAt(), trade.closedAt()));
+                trade.openedAt(), trade.closedAt(), strategyId, mlPrediction == null ? null : mlPrediction.model(),
+                cycle.finalDirection(), mlPrediction == null ? null : mlPrediction.decision(), probabilities,
+                predictionId, riskPlan, null, null));
         reasons.add("Paper trade opened and journaled: " + trade.id());
         return new GuardedExecutionResult(cycle, supervisor, riskPlan, quantity, trade,
                 "PAPER_TRADE_OPENED", reasons, Instant.now());

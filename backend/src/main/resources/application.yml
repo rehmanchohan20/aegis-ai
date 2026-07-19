@@ -34,6 +34,17 @@ aegis:
     base-url: ${ML_BASE_URL:http://localhost:8000}
     label-horizon-minutes: ${ML_LABEL_HORIZON_MINUTES:15}
     neutral-return-threshold: ${ML_NEUTRAL_RETURN_THRESHOLD:0.001}
+    volatility-label-multiplier: ${ML_VOLATILITY_LABEL_MULTIPLIER:0.50}
+    prediction-resolution-delay-ms: ${ML_PREDICTION_RESOLUTION_DELAY_MS:60000}
+    model-health-delay-ms: ${ML_MODEL_HEALTH_DELAY_MS:300000}
+    health-minimum-sample-size: ${ML_HEALTH_MINIMUM_SAMPLE_SIZE:30}
+    promotion:
+      minimum-balanced-accuracy: ${ML_PROMOTION_MIN_BALANCED_ACCURACY:0.55}
+      minimum-macro-f1: ${ML_PROMOTION_MIN_MACRO_F1:0.50}
+      minimum-directional-precision: ${ML_PROMOTION_MIN_DIRECTIONAL_PRECISION:0.52}
+      minimum-validation-samples: ${ML_PROMOTION_MIN_VALIDATION_SAMPLES:150}
+      maximum-calibration-error: ${ML_PROMOTION_MAX_CALIBRATION_ERROR:0.15}
+      minimum-worst-fold-balanced-accuracy: ${ML_PROMOTION_MIN_WORST_FOLD_BALANCED_ACCURACY:0.40}
     label-delay-ms: ${ML_LABEL_DELAY_MS:60000}
   execution:
     live-enabled: ${AEGIS_LIVE_EXECUTION_ENABLED:false}

@@ -9,7 +9,7 @@ You are the lead engineer continuing the AEGIS AI quantitative research and guar
 ## Repository and branch
 
 - Repository: `rehmanchohan20/aegis-ai`
-- Required branch: `sprint/01-foundation`
+- Required branch: `sposprint/01-foundation`
 - Work directly on this branch unless I explicitly request another branch.
 - Do not create a pull request.
 - Do not enable real-money trading.

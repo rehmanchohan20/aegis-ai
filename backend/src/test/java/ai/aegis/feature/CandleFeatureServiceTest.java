@@ -32,6 +32,13 @@ class CandleFeatureServiceTest {
         assertTrue(snapshot.usableValue("momentum10").isPresent());
         assertTrue(snapshot.usableValue("volatility20").isPresent());
         assertTrue(snapshot.usableValue("atrNormalized14").isPresent());
+        assertTrue(snapshot.usableValue("returnSkewness20").isPresent());
+        assertTrue(snapshot.usableValue("returnExcessKurtosis20").isPresent());
+        assertTrue(snapshot.usableValue("returnAutocorrelation1_20").isPresent());
+        assertTrue(snapshot.usableValue("parkinsonVolatility20").isPresent());
+        assertTrue(snapshot.usableValue("garmanKlassVolatility20").isPresent());
+        assertTrue(snapshot.usableValue("trendTStatistic20").isPresent());
+        assertTrue(snapshot.usableValue("amihudIlliquidity20").isPresent());
         assertTrue(snapshot.unusableFeatures().isEmpty());
     }
 

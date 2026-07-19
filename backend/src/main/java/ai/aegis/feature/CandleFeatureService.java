@@ -28,8 +28,18 @@ public class CandleFeatureService {
         add(features, "return5", pct(candles.get(candles.size()-6).close(), latest.close()), latest);
         add(features, "momentum10", pct(candles.get(candles.size()-11).close(), latest.close()), latest);
         add(features, "volatility20", volatility(candles, 20), latest);
+        add(features, "realizedVolatility20", realizedVolatility(candles, 20), latest);
+        add(features, "downsideDeviation20", downsideDeviation(candles, 20), latest);
+        add(features, "returnSkewness20", skewness(candles, 20), latest);
+        add(features, "returnExcessKurtosis20", excessKurtosis(candles, 20), latest);
+        add(features, "returnAutocorrelation1_20", autocorrelation(candles, 20), latest);
+        add(features, "parkinsonVolatility20", parkinsonVolatility(candles, 20), latest);
+        add(features, "garmanKlassVolatility20", garmanKlassVolatility(candles, 20), latest);
+        add(features, "trendTStatistic20", trendTStatistic(candles, 20), latest);
         add(features, "zscore20", zScore(candles, 20), latest);
         add(features, "rvol20", relativeVolume(candles, 20), latest);
+        add(features, "volumeZscore20", volumeZScore(candles, 20), latest);
+        add(features, "amihudIlliquidity20", amihudIlliquidity(candles, 20), latest);
         add(features, "bodyRatio", ratio(latest.close().subtract(latest.open()).abs(), latest.high().subtract(latest.low())), latest);
         add(features, "upperWickRatio", ratio(latest.high().subtract(latest.open().max(latest.close())), latest.high().subtract(latest.low())), latest);
         add(features, "lowerWickRatio", ratio(latest.open().min(latest.close()).subtract(latest.low()), latest.high().subtract(latest.low())), latest);
@@ -57,6 +67,119 @@ public class CandleFeatureService {
         double mean = java.util.Arrays.stream(r).average().orElse(0);
         double variance = java.util.Arrays.stream(r).map(x -> Math.pow(x - mean, 2)).sum() / Math.max(1, r.length - 1);
         return BigDecimal.valueOf(Math.sqrt(variance));
+    }
+
+    private BigDecimal realizedVolatility(List<Candle> candles, int n) {
+        double sumSquares = java.util.Arrays.stream(returns(candles, n)).map(value -> value * value).sum();
+        return finite(Math.sqrt(sumSquares));
+    }
+
+    private BigDecimal downsideDeviation(List<Candle> candles, int n) {
+        double[] values = returns(candles, n);
+        double downsideSquares = java.util.Arrays.stream(values)
+                .map(value -> Math.min(value, 0.0)).map(value -> value * value).sum();
+        return finite(Math.sqrt(downsideSquares / values.length));
+    }
+
+    private BigDecimal skewness(List<Candle> candles, int n) {
+        double[] values = returns(candles, n);
+        double mean = java.util.Arrays.stream(values).average().orElse(0.0);
+        double m2 = java.util.Arrays.stream(values).map(value -> Math.pow(value - mean, 2)).sum() / values.length;
+        if (m2 == 0.0 || values.length < 3) return BigDecimal.ZERO;
+        double m3 = java.util.Arrays.stream(values).map(value -> Math.pow(value - mean, 3)).sum() / values.length;
+        double correction = Math.sqrt(values.length * (values.length - 1.0)) / (values.length - 2.0);
+        return finite(correction * m3 / Math.pow(m2, 1.5));
+    }
+
+    private BigDecimal excessKurtosis(List<Candle> candles, int n) {
+        double[] values = returns(candles, n);
+        double mean = java.util.Arrays.stream(values).average().orElse(0.0);
+        double sum2 = java.util.Arrays.stream(values).map(value -> Math.pow(value - mean, 2)).sum();
+        if (sum2 == 0.0 || values.length < 4) return BigDecimal.ZERO;
+        double sum4 = java.util.Arrays.stream(values).map(value -> Math.pow(value - mean, 4)).sum();
+        double sample = values.length;
+        double adjusted = sample * (sample + 1.0) * sum4
+                / ((sample - 1.0) * (sample - 2.0) * (sample - 3.0) * Math.pow(sum2 / (sample - 1.0), 2))
+                - 3.0 * Math.pow(sample - 1.0, 2) / ((sample - 2.0) * (sample - 3.0));
+        return finite(adjusted);
+    }
+
+    private BigDecimal autocorrelation(List<Candle> candles, int n) {
+        double[] values = returns(candles, n);
+        double mean = java.util.Arrays.stream(values).average().orElse(0.0);
+        double denominator = java.util.Arrays.stream(values).map(value -> Math.pow(value - mean, 2)).sum();
+        if (denominator == 0.0) return BigDecimal.ZERO;
+        double numerator = 0.0;
+        for (int index = 1; index < values.length; index++) {
+            numerator += (values[index] - mean) * (values[index - 1] - mean);
+        }
+        return finite(numerator / denominator);
+    }
+
+    private BigDecimal parkinsonVolatility(List<Candle> candles, int n) {
+        List<Candle> window = candles.subList(candles.size() - n, candles.size());
+        double sum = window.stream().mapToDouble(candle -> {
+            double logRange = Math.log(candle.high().doubleValue() / candle.low().doubleValue());
+            return logRange * logRange;
+        }).sum();
+        return finite(Math.sqrt(sum / (4.0 * n * Math.log(2.0))));
+    }
+
+    private BigDecimal garmanKlassVolatility(List<Candle> candles, int n) {
+        List<Candle> window = candles.subList(candles.size() - n, candles.size());
+        double variance = window.stream().mapToDouble(candle -> {
+            double logRange = Math.log(candle.high().doubleValue() / candle.low().doubleValue());
+            double logCloseOpen = Math.log(candle.close().doubleValue() / candle.open().doubleValue());
+            return 0.5 * logRange * logRange - (2.0 * Math.log(2.0) - 1.0) * logCloseOpen * logCloseOpen;
+        }).average().orElse(0.0);
+        return finite(Math.sqrt(Math.max(variance, 0.0)));
+    }
+
+    private BigDecimal trendTStatistic(List<Candle> candles, int n) {
+        List<Candle> window = candles.subList(candles.size() - n, candles.size());
+        double xMean = (n - 1.0) / 2.0;
+        double yMean = window.stream().mapToDouble(candle -> Math.log(candle.close().doubleValue())).average().orElse(0.0);
+        double xx = 0.0;
+        double xy = 0.0;
+        for (int index = 0; index < n; index++) {
+            double centeredX = index - xMean;
+            xx += centeredX * centeredX;
+            xy += centeredX * (Math.log(window.get(index).close().doubleValue()) - yMean);
+        }
+        double slope = xy / xx;
+        double residualSquares = 0.0;
+        for (int index = 0; index < n; index++) {
+            double fitted = yMean + slope * (index - xMean);
+            residualSquares += Math.pow(Math.log(window.get(index).close().doubleValue()) - fitted, 2);
+        }
+        if (residualSquares == 0.0) return BigDecimal.ZERO;
+        double standardError = Math.sqrt((residualSquares / (n - 2.0)) / xx);
+        return finite(standardError == 0.0 ? 0.0 : slope / standardError);
+    }
+
+    private BigDecimal volumeZScore(List<Candle> candles, int n) {
+        List<Candle> window = candles.subList(candles.size() - n, candles.size());
+        double mean = window.stream().mapToDouble(candle -> candle.volume().doubleValue()).average().orElse(0.0);
+        double variance = window.stream().mapToDouble(candle -> Math.pow(candle.volume().doubleValue() - mean, 2)).sum() / n;
+        double standardDeviation = Math.sqrt(variance);
+        return finite(standardDeviation == 0.0 ? 0.0
+                : (window.getLast().volume().doubleValue() - mean) / standardDeviation);
+    }
+
+    private BigDecimal amihudIlliquidity(List<Candle> candles, int n) {
+        double[] logReturns = returns(candles, n);
+        int start = candles.size() - n;
+        double mean = 0.0;
+        for (int index = 1; index < n; index++) {
+            double dollarVolume = candles.get(start + index).close().doubleValue()
+                    * candles.get(start + index).volume().doubleValue();
+            if (dollarVolume > 0.0) mean += Math.abs(logReturns[index - 1]) / dollarVolume;
+        }
+        return finite(mean / logReturns.length * 1_000_000.0);
+    }
+
+    private BigDecimal finite(double value) {
+        return Double.isFinite(value) ? BigDecimal.valueOf(value) : null;
     }
 
     private BigDecimal zScore(List<Candle> candles, int n) {

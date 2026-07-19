@@ -27,4 +27,10 @@ public class PredictionResultsController {
     public Map<String, Object> summary(@RequestParam(required = false) String modelVersion) {
         return auditService.summary(modelVersion);
     }
+
+    @GetMapping("/rolling")
+    public List<Map<String, Object>> rolling(@RequestParam(required = false) String modelVersion,
+                                              @RequestParam(defaultValue = "30") int days) {
+        return auditService.rolling(modelVersion, days);
+    }
 }

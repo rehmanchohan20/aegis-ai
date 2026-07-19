@@ -75,7 +75,11 @@ public class PaperTradeMonitoringService {
                 previous == null ? null : previous.signalScore(),
                 previous == null ? null : previous.signalGrade(),
                 previous == null ? "Paper trade automatically closed by monitor" : previous.rationale(),
-                trade.openedAt(), trade.closedAt()
+                trade.openedAt(), trade.closedAt(), previous == null ? null : previous.strategyId(),
+                previous == null ? null : previous.modelVersion(), previous == null ? null : previous.rulesDirection(),
+                previous == null ? null : previous.mlDirection(), previous == null ? Map.of() : previous.mlProbabilities(),
+                previous == null ? null : previous.featureSnapshotRef(), previous == null ? null : previous.riskPlan(),
+                trade.status(), previous == null ? null : previous.marketRegime()
         );
         journalStore.save(closed);
         if (attributionService != null) attributionService.attribute(closed);

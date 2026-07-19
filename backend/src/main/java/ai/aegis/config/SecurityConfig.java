@@ -19,6 +19,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 @Configuration
 public class SecurityConfig {
@@ -50,8 +52,8 @@ public class SecurityConfig {
                                                   FilterChain chain) throws ServletException, IOException {
             String key = request.getHeader("X-AEGIS-API-KEY");
             if (key != null) {
-                if (key.equals(adminKey)) authenticate("admin", List.of("ROLE_ADMIN", "ROLE_VIEWER"));
-                else if (key.equals(viewerKey)) authenticate("viewer", List.of("ROLE_VIEWER"));
+                if (matches(key, adminKey)) authenticate("admin", List.of("ROLE_ADMIN", "ROLE_VIEWER"));
+                else if (matches(key, viewerKey)) authenticate("viewer", List.of("ROLE_VIEWER"));
                 else { response.sendError(HttpStatus.UNAUTHORIZED.value(), "Invalid API key"); return; }
             }
             chain.doFilter(request, response);
@@ -61,6 +63,11 @@ public class SecurityConfig {
             var authorities = roles.stream().map(SimpleGrantedAuthority::new).toList();
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(principal, null, authorities));
+        }
+
+        private boolean matches(String supplied, String configured) {
+            return MessageDigest.isEqual(supplied.getBytes(StandardCharsets.UTF_8),
+                    configured.getBytes(StandardCharsets.UTF_8));
         }
     }
 }

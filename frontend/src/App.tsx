@@ -1,117 +1,98 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CandleChart } from './CandleChart';
 
-type RiskPlan = { entry: number | null; stopLoss: number | null; takeProfit1: number | null; takeProfit2: number | null; riskReward: number; riskPercent: number; status: string; };
-type Analysis = { symbol: string; interval: string; decision: string; score: number; grade: string; confidence: number; indicators: Record<string, number>; risk: RiskPlan; reasons: string[]; };
-type Candle = { openTime: string; open: number; high: number; low: number; close: number; volume: number; };
-type ModelVersion = { modelName: string; version: string; status: string; metrics: Record<string, unknown>; createdAt: string; activatedAt: string | null; };
-type StrategyPerformance = { strategyId: string; trades: number; netPnl: number; averagePnl: number; winRate: number; };
-type Insights = { activeModel: ModelVersion | null; strategies: StrategyPerformance[]; labelledExamples: number; unlabelledExamples: number; };
+type RiskPlan = { entry: number | null; stopLoss: number | null; takeProfit1: number | null; takeProfit2: number | null; riskReward: number; riskPercent: number; status: string };
+type Analysis = { symbol: string; interval: string; decision: string; score: number; grade: string; confidence: number; indicators: Record<string, number>; risk: RiskPlan; reasons: string[] };
+type Candle = { openTime: string; open: number; high: number; low: number; close: number; volume: number };
+type PaperTrade = { id: string; symbol: string; interval: string; side: string; entryPrice: number; status: string; realizedPnl: number; openedAt: string; closedAt: string | null };
+type ModelVersion = { modelName: string; version: string; status: string; metrics: Record<string, unknown>; createdAt: string; activatedAt: string | null };
+type Performance = { strategyId?: string; modelVersion?: string; trades: number; netPnl: number; averagePnl: number; winRate: number };
+type Insights = { activeModel: ModelVersion | null; strategies: Performance[]; models: Performance[]; modelHealth: Record<string, unknown>; labelledExamples: number; unlabelledExamples: number };
+type Prediction = { id: string; model_version: string; rules_direction: string; predicted_direction: string; long_probability: number; wait_probability: number; short_probability: number; confidence: number; confidence_margin: number | null; feature_drift_score: number | null; drift_status: string | null; prediction_entropy: number | null; uncertainty_status: string | null; prediction_set: string[] | null; outcome_label: number | null; correct: boolean | null; prediction_time: string };
+type PredictionSummary = { total: number; pending: number; resolved: number; correct: number; average_confidence: number; accuracy: number; directional_precision: number; calibration_error: number };
+type Dashboard = { decision: { finalDirection: string; finalScore: number; reasons: string[] } | null; paperTrades: PaperTrade[]; openTrades: number; predictionSummary: PredictionSummary; recentPredictions: Prediction[]; insights: Insights; safety: { liveExecutionEnabled: boolean; killSwitchEngaged: boolean; executionMode: string }; generatedAt: string };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 const API_KEY = import.meta.env.VITE_AEGIS_API_KEY ?? 'local-viewer-change-me';
 const SYMBOL = 'BTCUSDT';
 const INTERVAL = '1m';
-const authHeaders = { 'X-AEGIS-API-KEY': API_KEY };
+
+async function fetchJson<T>(path: string): Promise<T | null> {
+  const response = await fetch(`${API_BASE}${path}`, { headers: { 'X-AEGIS-API-KEY': API_KEY, Accept: 'application/json' } });
+  if (response.status === 204) return null;
+  const body = await response.text();
+  if (!response.ok) throw new Error(`${path} returned ${response.status}${body ? `: ${body.slice(0, 180)}` : ''}`);
+  if (!body.trim()) return null;
+  try { return JSON.parse(body) as T; }
+  catch { throw new Error(`${path} returned invalid JSON`); }
+}
+
+function percentage(value: number | null | undefined): string { return `${(Number(value ?? 0) * 100).toFixed(1)}%`; }
+function pnl(value: number | null | undefined): string { const amount = Number(value ?? 0); return `${amount >= 0 ? '+' : ''}${amount.toFixed(2)}`; }
 
 export default function App() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
-  const [insights, setInsights] = useState<Insights | null>(null);
-  const [status, setStatus] = useState('Connecting to market engine…');
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
+    let active = true;
     const load = async () => {
       try {
-        const [analysisResponse, candlesResponse, insightsResponse] = await Promise.all([
-          fetch(`${API_BASE}/api/v1/analysis/latest?symbol=${SYMBOL}&interval=${INTERVAL}`, { headers: authHeaders }),
-          fetch(`${API_BASE}/api/v1/candles?symbol=${SYMBOL}&interval=${INTERVAL}&limit=200`, { headers: authHeaders }),
-          fetch(`${API_BASE}/api/v1/insights`, { headers: authHeaders }),
+        const [nextAnalysis, rawCandles, nextDashboard] = await Promise.all([
+          fetchJson<Analysis>(`/api/v1/analysis/latest?symbol=${SYMBOL}&interval=${INTERVAL}`),
+          fetchJson<Array<Record<string, unknown>>>(`/api/v1/candles?symbol=${SYMBOL}&interval=${INTERVAL}&limit=200`),
+          fetchJson<Dashboard>('/api/v1/dashboard'),
         ]);
-
-        if (!candlesResponse.ok) throw new Error(`Candle API returned ${candlesResponse.status}`);
-        const rawCandles = await candlesResponse.json();
-        setCandles(rawCandles.map((c: Record<string, unknown>) => ({
-          ...c, open: Number(c.open), high: Number(c.high), low: Number(c.low),
-          close: Number(c.close), volume: Number(c.volume),
-        })));
-
-        if (analysisResponse.status === 204) {
-          setAnalysis(null);
-          setStatus('Collecting at least 35 validated candles…');
-        } else {
-          if (!analysisResponse.ok) throw new Error(`Analysis API returned ${analysisResponse.status}`);
-          setAnalysis(await analysisResponse.json());
-          setStatus('Live engine connected');
-        }
-        if (insightsResponse.ok) setInsights(await insightsResponse.json());
-        setLastUpdated(new Date());
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : 'Unable to reach backend');
-      }
+        if (!active) return;
+        setAnalysis(nextAnalysis);
+        setCandles((rawCandles ?? []).map((item) => ({ openTime: String(item.openTime), open: Number(item.open), high: Number(item.high), low: Number(item.low), close: Number(item.close), volume: Number(item.volume) })));
+        setDashboard(nextDashboard); setError(null); setLastUpdated(new Date());
+      } catch (caught) { if (active) setError(caught instanceof Error ? caught.message : 'Unable to reach the AEGIS API'); }
+      finally { if (active) setLoading(false); }
     };
-
-    load();
-    const timer = window.setInterval(load, 5_000);
-    return () => window.clearInterval(timer);
+    void load();
+    const timer = window.setInterval(() => void load(), 10_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, []);
 
+  const latestPrediction = dashboard?.recentPredictions[0] ?? null;
+  const summary = dashboard?.predictionSummary;
+  const healthStatus = String(dashboard?.insights.modelHealth.status ?? latestPrediction?.drift_status ?? 'WATCH');
+  const classDistributionShift = Number(dashboard?.insights.modelHealth.class_distribution_shift ?? 0);
+  const populationStabilityIndex = Number(dashboard?.insights.modelHealth.feature_population_stability_index ?? 0);
+  const trades = dashboard?.paperTrades ?? [];
+  const openTrades = trades.filter((trade) => trade.status === 'OPEN');
+  const closedTrades = trades.filter((trade) => trade.status !== 'OPEN');
   const metrics = useMemo(() => [
-    ['Trend', analysis ? (analysis.indicators.price > analysis.indicators.ema20 ? 'Bullish' : 'Bearish') : '—'],
-    ['VWAP', analysis?.indicators.vwap?.toFixed(2) ?? '—'],
-    ['RSI 14', analysis?.indicators.rsi14?.toFixed(2) ?? '—'],
-    ['MACD Hist.', analysis?.indicators.macdHistogram?.toFixed(4) ?? '—'],
-    ['ATR %', analysis?.indicators.atrPercent?.toFixed(2) ?? '—'],
-    ['Confidence', analysis ? `${analysis.confidence}%` : '—'],
-  ], [analysis]);
+    ['Rules decision', dashboard?.decision?.finalDirection ?? analysis?.decision ?? 'WAIT'],
+    ['Signal score', String(dashboard?.decision?.finalScore ?? analysis?.score ?? '—')],
+    ['Active model', dashboard?.insights.activeModel?.version ?? 'No active model'],
+    ['Recent accuracy', percentage(summary?.accuracy)],
+    ['Directional precision', percentage(summary?.directional_precision)],
+    ['Pending outcomes', String(summary?.pending ?? 0)],
+  ], [analysis, dashboard, summary]);
 
-  const risk = analysis?.risk;
-  return (
-    <main className="shell">
-      <header className="topbar">
-        <div><p className="eyebrow">AEGIS AI</p><h1>Trading Intelligence Command Center</h1><p className="subtitle">Multi-factor confirmation, explainable decisions and capital-first risk control.</p></div>
-        <div className="connection-block"><span className="live">● {status}</span><small>{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Waiting for first update'}</small></div>
-      </header>
+  return <main className="shell">
+    <header className="topbar"><div><p className="eyebrow">AEGIS AI</p><h1>Guarded Research & Paper Trading</h1><p className="subtitle">Explainable rules, drift-aware ML confirmation, auditable outcomes, and fail-closed execution.</p></div><div className="connection-block"><span className={`live ${error ? 'state-error' : ''}`}>● {loading ? 'Loading' : error ? 'API degraded' : 'Local stack connected'}</span><small>{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Waiting for first update'}</small></div></header>
+    {error && <section className="error-banner" role="alert"><strong>API error</strong><span>{error}</span></section>}
+    <section className="status-strip"><div><span>Execution mode</span><strong>{dashboard?.safety.executionMode ?? 'PAPER_ONLY'}</strong></div><div><span>Kill switch</span><strong className="safe">{(dashboard?.safety.killSwitchEngaged ?? true) ? 'ENGAGED' : 'RELEASED'}</strong></div><div><span>Model health</span><strong className={`health-${healthStatus.toLowerCase()}`}>{healthStatus}</strong></div><div><span>Open positions</span><strong>{dashboard?.openTrades ?? 0}</strong></div></section>
+    <section className="hero-grid"><article className="panel chart-panel"><div className="panel-heading"><div><p className="eyebrow">{SYMBOL} · {INTERVAL}</p><h2>Validated candle structure</h2></div><div className="price-block"><strong>{analysis ? `$${Number(analysis.indicators.price).toLocaleString()}` : '$—'}</strong><span>{candles.length} candles</span></div></div><CandleChart candles={candles} /></article><aside className="panel intelligence-panel"><div className="panel-heading compact"><div><p className="eyebrow">Unified decision</p><h2>Rules + ML</h2></div><span className={`grade grade-${(dashboard?.decision?.finalDirection ?? 'WAIT').toLowerCase()}`}>{dashboard?.decision?.finalDirection ?? 'WAIT'}</span></div><div className="metric-list">{metrics.map(([label, value]) => <div className="metric" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div><p className="decision-reason">{dashboard?.decision?.reasons?.[0] ?? analysis?.reasons?.[0] ?? 'Waiting for enough validated market data.'}</p></aside></section>
+    <section className="lower-grid"><article className="panel"><p className="eyebrow">Latest prediction</p><h2>LONG / WAIT / SHORT</h2><div className="probability-bars">{([['LONG', latestPrediction?.long_probability], ['WAIT', latestPrediction?.wait_probability], ['SHORT', latestPrediction?.short_probability]] as const).map(([label, value]) => <div key={label}><span>{label}<b>{percentage(value)}</b></span><progress max="1" value={Number(value ?? 0)} /></div>)}</div><div className="metric-list compact-list"><div className="metric"><span>ML decision</span><strong>{latestPrediction?.predicted_direction ?? 'WAIT'}</strong></div><div className="metric"><span>Confidence margin</span><strong>{percentage(latestPrediction?.confidence_margin)}</strong></div><div className="metric"><span>Prediction entropy</span><strong>{Number(latestPrediction?.prediction_entropy ?? 0).toFixed(3)}</strong></div><div className="metric"><span>Conformal set</span><strong>{latestPrediction?.prediction_set?.join(' / ') ?? '—'}</strong></div><div className="metric"><span>Uncertainty</span><strong>{latestPrediction?.uncertainty_status ?? '—'}</strong></div><div className="metric"><span>Feature drift score</span><strong>{Number(latestPrediction?.feature_drift_score ?? 0).toFixed(3)}</strong></div><div className="metric"><span>Calibration error</span><strong>{percentage(summary?.calibration_error)}</strong></div></div></article><article className="panel"><p className="eyebrow">Risk plan</p><h2>Capital-first controls</h2><div className="risk-grid">{[['Entry', analysis?.risk.entry], ['Stop', analysis?.risk.stopLoss], ['Target 1', analysis?.risk.takeProfit1], ['Target 2', analysis?.risk.takeProfit2], ['Risk %', analysis?.risk.riskPercent], ['R:R', analysis?.risk.riskReward]].map(([label, value]) => <div className="risk-item" key={label as string}><span>{label}</span><strong>{value == null ? '—' : Number(value).toFixed(3)}</strong></div>)}</div><div className="safety-note">Live orders remain blocked unless every guarded execution prerequisite is explicitly satisfied.</div></article></section>
+    <section className="lower-grid"><article className="panel"><p className="eyebrow">Statistical stability</p><h2>Distribution monitoring</h2><div className="metric-list"><div className="metric"><span>Class distribution shift</span><strong>{classDistributionShift.toFixed(3)}</strong></div><div className="metric"><span>Population stability index</span><strong>{populationStabilityIndex.toFixed(3)}</strong></div><div className="metric"><span>Recent sample size</span><strong>{String(dashboard?.insights.modelHealth.sample_size ?? 0)}</strong></div></div></article><article className="panel"><p className="eyebrow">Outcome maintenance</p><h2>Prediction evidence</h2><div className="metric-list"><div className="metric"><span>Resolved outcomes</span><strong>{summary?.resolved ?? 0}</strong></div><div className="metric"><span>Pending outcomes</span><strong>{summary?.pending ?? 0}</strong></div><div className="metric"><span>Average confidence</span><strong>{percentage(summary?.average_confidence)}</strong></div></div></article></section>
+    <section className="lower-grid"><Attribution title="Strategy P&L attribution" rows={dashboard?.insights.strategies ?? []} label={(row) => row.strategyId ?? 'unknown'} /><Attribution title="Model-version P&L attribution" rows={dashboard?.insights.models ?? []} label={(row) => row.modelVersion ?? 'rules-only'} /></section>
+    <section className="lower-grid"><TradeList title="Open paper positions" trades={openTrades} /><TradeList title="Closed paper trades" trades={closedTrades} /></section>
+    <footer>Research and paper-trading software only. Real-money execution is disabled by default and remains fail-closed.</footer>
+  </main>;
+}
 
-      <section className="hero-grid">
-        <article className="panel chart-panel">
-          <div className="panel-heading"><div><p className="eyebrow">{SYMBOL} · {INTERVAL}</p><h2>Live market structure</h2></div><div className="price-block"><strong>{analysis ? `$${analysis.indicators.price.toLocaleString()}` : '$—'}</strong><span>{candles.length} candles loaded</span></div></div>
-          <CandleChart candles={candles} />
-        </article>
-        <aside className="panel intelligence-panel">
-          <div className="panel-heading compact"><div><p className="eyebrow">Decision Engine v2</p><h2>Market state</h2></div><span className={`grade grade-${analysis?.grade?.replace('+', 'plus') ?? 'none'}`}>{analysis?.grade ?? '—'}</span></div>
-          <div className="metric-list">{metrics.map(([label, value]) => <div className="metric" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
-          <div className={`signal-card signal-${analysis?.decision?.toLowerCase() ?? 'wait'}`}><span>Current decision · Score {analysis?.score ?? '—'}/100</span><strong>{analysis?.decision ?? 'WAIT'}</strong><p>{analysis?.reasons?.[0] ?? 'No trade is shown until the engine has enough validated market data.'}</p></div>
-        </aside>
-      </section>
+function Attribution({ title, rows, label }: { title: string; rows: Performance[]; label: (row: Performance) => string }) {
+  return <article className="panel"><p className="eyebrow">Attribution</p><h2>{title}</h2><div className="metric-list">{rows.slice(0, 8).map((row) => <div className="metric" key={label(row)}><span>{label(row)} · {row.trades} trades · {Number(row.winRate).toFixed(1)}% win</span><strong className={Number(row.netPnl) >= 0 ? 'positive' : 'negative'}>{pnl(row.netPnl)}</strong></div>)}{rows.length === 0 && <div className="empty-state">No closed attributed trades yet.</div>}</div></article>;
+}
 
-      <section className="lower-grid">
-        <article className="panel"><p className="eyebrow">Risk Engine</p><h2>Structured trade plan</h2><div className="risk-grid">{[['Entry', risk?.entry], ['Stop loss', risk?.stopLoss], ['Take profit 1', risk?.takeProfit1], ['Take profit 2', risk?.takeProfit2], ['Risk %', risk?.riskPercent], ['R:R', risk?.riskReward]].map(([label, value]) => <div className="risk-item" key={label as string}><span>{label}</span><strong>{value == null ? '—' : Number(value).toFixed(label === 'Risk %' ? 2 : 4)}</strong></div>)}</div><div className={`risk-status risk-${risk?.status?.toLowerCase() ?? 'no_trade'}`}>{risk?.status ?? 'NO_TRADE'}</div></article>
-        <article className="panel"><p className="eyebrow">Explainability</p><h2>Why the engine decided this</h2><ol className="reason-list">{(analysis?.reasons ?? ['Waiting for sufficient live data.']).map(reason => <li key={reason}>{reason}</li>)}</ol></article>
-      </section>
-
-      <section className="lower-grid">
-        <article className="panel">
-          <p className="eyebrow">ML Operations</p><h2>Active production model</h2>
-          <div className="metric-list">
-            <div className="metric"><span>Model</span><strong>{insights?.activeModel?.modelName ?? 'No active model'}</strong></div>
-            <div className="metric"><span>Version</span><strong>{insights?.activeModel?.version ?? '—'}</strong></div>
-            <div className="metric"><span>Status</span><strong>{insights?.activeModel?.status ?? 'CANDIDATE ONLY'}</strong></div>
-            <div className="metric"><span>Labelled examples</span><strong>{insights?.labelledExamples ?? 0}</strong></div>
-            <div className="metric"><span>Pending labels</span><strong>{insights?.unlabelledExamples ?? 0}</strong></div>
-          </div>
-        </article>
-        <article className="panel">
-          <p className="eyebrow">Strategy Attribution</p><h2>Realized performance</h2>
-          <div className="metric-list">
-            {(insights?.strategies ?? []).slice(0, 6).map(strategy => <div className="metric" key={strategy.strategyId}><span>{strategy.strategyId} · {strategy.trades} trades · {Number(strategy.winRate).toFixed(1)}% win</span><strong>{Number(strategy.netPnl).toFixed(2)}</strong></div>)}
-            {!insights?.strategies?.length && <div className="metric"><span>No closed attributed trades yet</span><strong>—</strong></div>}
-          </div>
-        </article>
-      </section>
-
-      <footer>Research and decision-support software only. Live exchange execution is fail-closed and disabled by default.</footer>
-    </main>
-  );
+function TradeList({ title, trades }: { title: string; trades: PaperTrade[] }) {
+  return <article className="panel"><p className="eyebrow">Paper ledger</p><h2>{title}</h2><div className="trade-list">{trades.slice(0, 8).map((trade) => <div key={trade.id}><span><b>{trade.symbol}</b> {trade.side} · {trade.status}</span><strong className={Number(trade.realizedPnl) >= 0 ? 'positive' : 'negative'}>{pnl(trade.realizedPnl)}</strong></div>)}{trades.length === 0 && <div className="empty-state">No trades in this state.</div>}</div></article>;
 }

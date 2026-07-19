@@ -11,6 +11,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.net.URI;
 
 @Service
 public class ModelRegistryService {
@@ -26,6 +29,9 @@ public class ModelRegistryService {
                                  String artifactUri, List<String> featureNames) {
         if (modelName == null || modelName.isBlank() || version == null || version.isBlank())
             throw new IllegalArgumentException("modelName and version are required");
+        if (artifactUri == null || artifactUri.isBlank()) throw new IllegalArgumentException("artifactUri is required");
+        if (featureNames == null || featureNames.isEmpty() || featureNames.stream().anyMatch(name -> name == null || name.isBlank()))
+            throw new IllegalArgumentException("a non-empty feature schema is required");
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO intelligence.model_registry
@@ -38,12 +44,24 @@ public class ModelRegistryService {
 
     @Transactional
     public ModelVersion activate(UUID id) {
+        return activate(id, "ACTIVATE");
+    }
+
+    private ModelVersion activate(UUID id, String action) {
         ModelVersion candidate = get(id);
         if (!approved(id)) throw new IllegalStateException("Model has no passing deployment approval");
+        verifyArtifact(candidate.artifactUri());
+        ModelVersion previous = active(candidate.modelName());
         jdbc.update("UPDATE intelligence.model_registry SET status='RETIRED', retired_at=? WHERE model_name=? AND status='ACTIVE'",
                 Timestamp.from(Instant.now()), candidate.modelName());
         jdbc.update("UPDATE intelligence.model_registry SET status='ACTIVE', activated_at=?, retired_at=NULL WHERE id=?",
                 Timestamp.from(Instant.now()), id);
+        jdbc.update("""
+                INSERT INTO intelligence.model_activation_audit
+                (id, model_id, model_name, version, action, previous_model_id, performed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, UUID.randomUUID(), candidate.id(), candidate.modelName(), candidate.version(), action,
+                previous == null ? null : previous.id(), Timestamp.from(Instant.now()));
         return get(id);
     }
 
@@ -52,7 +70,7 @@ public class ModelRegistryService {
         List<UUID> ids = jdbc.query("SELECT id FROM intelligence.model_registry WHERE model_name=? AND version=?",
                 (rs, n) -> UUID.fromString(rs.getString("id")), modelName, version);
         if (ids.isEmpty()) throw new IllegalArgumentException("Model version not found");
-        return activate(ids.getFirst());
+        return activate(ids.getFirst(), "ROLLBACK");
     }
 
     public ModelVersion active(String modelName) {
@@ -79,6 +97,19 @@ public class ModelRegistryService {
                 WHERE model_id=? ORDER BY evaluated_at DESC LIMIT 1
                 """, (rs, n) -> rs.getBoolean("approved"), id);
         return !values.isEmpty() && Boolean.TRUE.equals(values.getFirst());
+    }
+
+    private void verifyArtifact(String artifactUri) {
+        try {
+            URI uri = URI.create(artifactUri);
+            Path path = uri.getScheme() == null ? Path.of(artifactUri)
+                    : "file".equalsIgnoreCase(uri.getScheme()) ? Path.of(uri) : null;
+            if (path == null || !Files.isRegularFile(path) || !Files.isReadable(path)) {
+                throw new IllegalStateException("Model artifact is not a readable local file: " + artifactUri);
+            }
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalStateException("Model artifact URI is invalid: " + artifactUri, invalid);
+        }
     }
 
     @SuppressWarnings("unchecked")

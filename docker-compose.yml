@@ -31,6 +31,46 @@ services:
     volumes:
       - ml-models:/app/models
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    volumes:
+      - ml-models:/app/models:ro
+    environment:
+      DB_URL: jdbc:postgresql://timescaledb:5432/aegis
+      DB_USERNAME: aegis
+      DB_PASSWORD: aegis
+      ML_BASE_URL: http://ml-service:8000
+      AEGIS_VIEWER_API_KEY: ${AEGIS_VIEWER_API_KEY:-local-viewer-change-me}
+      AEGIS_ADMIN_API_KEY: ${AEGIS_ADMIN_API_KEY:-local-admin-change-me}
+      AEGIS_LIVE_EXECUTION_ENABLED: "false"
+      BINANCE_INGESTION_ENABLED: ${BINANCE_INGESTION_ENABLED:-false}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ""
+        VITE_AEGIS_API_KEY: ${AEGIS_VIEWER_API_KEY:-local-viewer-change-me}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    restart: unless-stopped
 
 volumes:
   timescale-data:
