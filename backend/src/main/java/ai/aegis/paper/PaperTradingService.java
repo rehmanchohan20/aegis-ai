@@ -35,7 +35,19 @@ public class PaperTradingService {
         boolean targetHit = longTrade ? marketPrice.compareTo(trade.takeProfit()) >= 0
                 : marketPrice.compareTo(trade.takeProfit()) <= 0;
 
-        if (!stopHit && !targetHit) return trade;
+        if (!stopHit && !targetHit) {
+            BigDecimal movement = "LONG".equals(trade.side())
+                    ? marketPrice.subtract(trade.entryPrice()) : trade.entryPrice().subtract(marketPrice);
+            BigDecimal unrealized = movement.multiply(trade.quantity()).subtract(trade.fees())
+                    .setScale(2, RoundingMode.HALF_UP);
+            PaperTrade marked = new PaperTrade(trade.id(), trade.symbol(), trade.interval(), trade.side(),
+                    trade.entryPrice(), trade.stopLoss(), trade.takeProfit(), trade.quantity(), trade.status(),
+                    trade.realizedPnl(), trade.openedAt(), trade.closedAt(), trade.averageFillPrice(), trade.fees(),
+                    trade.slippage(), unrealized, trade.maximumFavorableExcursion().max(unrealized),
+                    trade.maximumAdverseExcursion().min(unrealized));
+            trades.put(id, marked);
+            return marked;
+        }
         return close(id, stopHit ? trade.stopLoss() : trade.takeProfit(), stopHit ? "STOPPED" : "TARGET_HIT");
     }
 
@@ -45,10 +57,12 @@ public class PaperTradingService {
         BigDecimal movement = "LONG".equals(trade.side())
                 ? exitPrice.subtract(trade.entryPrice())
                 : trade.entryPrice().subtract(exitPrice);
-        BigDecimal pnl = movement.multiply(trade.quantity()).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal pnl = movement.multiply(trade.quantity()).subtract(trade.fees()).setScale(2, RoundingMode.HALF_UP);
         PaperTrade closed = new PaperTrade(trade.id(), trade.symbol(), trade.interval(), trade.side(),
                 trade.entryPrice(), trade.stopLoss(), trade.takeProfit(), trade.quantity(), status,
-                pnl, trade.openedAt(), Instant.now());
+                pnl, trade.openedAt(), Instant.now(), trade.averageFillPrice(), trade.fees(), trade.slippage(),
+                BigDecimal.ZERO, trade.maximumFavorableExcursion().max(pnl),
+                trade.maximumAdverseExcursion().min(pnl));
         trades.put(id, closed);
         return closed;
     }
@@ -57,6 +71,17 @@ public class PaperTradingService {
         List<PaperTrade> result = new ArrayList<>(trades.values());
         result.sort(Comparator.comparing(PaperTrade::openedAt).reversed());
         return List.copyOf(result);
+    }
+
+    public PaperTrade applyExecutionCosts(UUID id, BigDecimal averageFillPrice, BigDecimal fees, BigDecimal slippage) {
+        PaperTrade trade = require(id);
+        PaperTrade costed = new PaperTrade(trade.id(), trade.symbol(), trade.interval(), trade.side(),
+                averageFillPrice, trade.stopLoss(), trade.takeProfit(), trade.quantity(), trade.status(),
+                trade.realizedPnl(), trade.openedAt(), trade.closedAt(), averageFillPrice,
+                fees == null ? BigDecimal.ZERO : fees, slippage == null ? BigDecimal.ZERO : slippage,
+                trade.unrealizedPnl(), trade.maximumFavorableExcursion(), trade.maximumAdverseExcursion());
+        trades.put(id, costed);
+        return costed;
     }
 
     private PaperTrade require(UUID id) {

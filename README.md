@@ -1,86 +1,111 @@
 # AEGIS AI
 
-AEGIS is a local-first quantitative research and guarded paper-trading platform. It combines explainable rules, chronological ML validation, prediction outcome maintenance, model-health monitoring, risk sizing, paper execution, and normalized strategy/model attribution. Real-money execution is disabled by default and deliberately fail-closed.
+AEGIS is a local-first, real-time quantitative research and guarded paper-trading platform. It consumes public Binance streams, maintains one-second multi-pair market state, derives multi-timeframe structure and microstructure features, combines explainable rules with approval-gated calibrated ML, simulates exchange-like paper orders, and measures every prediction and trade outcome.
+
+Real-money trading is disabled. No production venue adapter or exchange credential is included.
 
 ## Architecture
 
-- **Backend:** Java 21, Spring Boot 3.5, Maven, JDBC, Flyway, Spring Security API keys, Actuator, Prometheus.
-- **Data:** PostgreSQL 16 with TimescaleDB. Flyway creates market, trading, intelligence, and execution structures.
-- **ML service:** Python 3.12, FastAPI, pandas/NumPy, scikit-learn, joblib versioned artifacts.
-- **Dashboard:** React, strict TypeScript, Vite, responsive local operations dashboard, Nginx production image.
-- **Safe pipeline:** closed candles → features → configured strategies → rules decision → drift-aware ML confirm/veto → supervisor → risk → paper trade → monitoring → journal/attribution → prediction resolution → model health.
+- Java 21 / Spring Boot 3.5 backend: WebSocket ingestion, features, structure, rules, portfolio supervision, paper matching, persistence, security, scheduled reconciliation, attribution, Actuator, and Prometheus.
+- PostgreSQL 16 / TimescaleDB: candles, one-second market snapshots, prediction history, model/drift registry, paper orders/fills, trade journal, and Flyway V1 onward.
+- Python 3.12 / FastAPI ML service: robust preprocessing, calibrated multiclass ensemble, auxiliary return/volatility/path models, chronological holdout, purged walk-forward validation, feature schema/reference statistics, versioned artifacts.
+- React / strict TypeScript / Vite / Lightweight Charts: authenticated SSE command center with live prices, candles, EMA/VWAP/ATR overlays, validated trend lines, structure, order flow, predictions, rankings, trades, attribution, and health.
 
-ML never originates a trade. `WAIT` is neutral, degraded ML cannot veto a valid rules signal, and a halted/drifted prediction is forced to `WAIT`.
+```text
+Binance book/trade/depth/kline streams
+  -> deduplicated per-symbol state -> one-second Timescale snapshots + authenticated SSE
+  -> closed-candle features + microstructure + confirmed-pivot market structure
+  -> rules + regime + multi-timeframe + correlation + cost/risk gates
+  -> calibrated ML confirm/veto (never originates trades)
+  -> persisted paper order/fill -> monitored position -> journal/attribution
+  -> prediction/path reconciliation -> rolling performance/drift/model health
+```
+
+## Defaults and configuration
+
+Default markets: `BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,LINKUSDT`.
+
+Default analysis timeframes: `1m,3m,5m,15m,1h,4h`.
+
+Copy [.env.example](.env.example) to `.env` for local Compose. Use [.env.production.example](.env.production.example) only as a template and replace every placeholder. Never commit `.env`, passwords, exchange keys, or model-approval tokens.
+
+| Variable | Purpose | Local behavior |
+|---|---|---|
+| `AEGIS_MARKET_SYMBOLS` | comma-separated stream universe | eight pairs above |
+| `AEGIS_MARKET_INTERVALS` | analysis/kline timeframes | six timeframes above |
+| `AEGIS_MARKET_SNAPSHOT_INTERVAL_MS` | snapshot/SSE cadence | `1000` |
+| `BINANCE_INGESTION_ENABLED` | public market-data ingestion | `true` |
+| `AEGIS_VIEWER_API_KEY` | read APIs | local non-secret key |
+| `AEGIS_ADMIN_API_KEY` | admin/model APIs | local non-secret key |
+| `AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN` | separate backend-to-ML activation gate | local non-secret token |
+| `AEGIS_LIVE_EXECUTION_ENABLED` | live execution master switch | always `false` in Compose |
+| `AEGIS_EXECUTION_CONFIRMATION_TOKEN` | separate live confirmation | `DISABLED` locally |
+| `ML_LABEL_HORIZON_MINUTES` | prediction resolution horizon | `15` |
+| `ML_NEUTRAL_RETURN_THRESHOLD` | realized WAIT zone | `0.001` |
+| `ML_PROMOTION_*` | balanced accuracy/F1/precision/calibration/sample gates | see examples |
 
 ## Prerequisites
 
-- IntelliJ IDEA with a Java 21+ project SDK (the repository targets Java 21).
-- Maven 3.9+ (IntelliJ's bundled Maven is supported).
-- Node.js 22 recommended (20+ works for the current build).
-- Python 3.12.
-- Docker Desktop with Compose v2 for database and full-stack verification.
+- Docker Desktop with Compose v2.
+- IntelliJ IDEA with a Java 21 project SDK. IntelliJ 2026.1 bundled JBR and bundled Maven are supported; no system Java source tree is required.
+- Node.js 22 and npm.
+- Python 3.12 for host-side ML development.
 
-No exchange credentials are needed or expected.
+## Start the complete safe stack
 
-## Environment
+```powershell
+docker compose up -d --build
+docker compose ps
+```
 
-Copy `.env.example` to `.env` for safe local Docker development. Production uses `.env.production.example` as a template; replace every placeholder. Never commit `.env` files or exchange secrets.
-
-Important variables:
-
-| Variable | Purpose | Safe default |
-|---|---|---|
-| `AEGIS_VIEWER_API_KEY` | Read-only API access | local development key |
-| `AEGIS_ADMIN_API_KEY` | Model administration/execution API access | local development key |
-| `AEGIS_LIVE_EXECUTION_ENABLED` | Master live-execution flag | `false` |
-| `AEGIS_EXECUTION_CONFIRMATION_TOKEN` | Separate live confirmation | `DISABLED` |
-| `BINANCE_INGESTION_ENABLED` | External candle stream | local Compose uses `false` |
-| `ML_LABEL_HORIZON_MINUTES` | Prediction outcome horizon | `15` |
-| `ML_NEUTRAL_RETURN_THRESHOLD` | WAIT return band, absolute decimal | `0.001` |
-| `ML_HEALTH_MINIMUM_SAMPLE_SIZE` | Minimum resolved health window | `30` |
-| `ML_PROMOTION_*` | Promotion quality gates | see examples |
-
-API calls use `X-AEGIS-API-KEY`:
+Open [http://localhost:3000](http://localhost:3000). Backend is on `:8080`, ML on `:8000`, TimescaleDB on host `:5433`, and Redis on `:6379`.
 
 ```powershell
 $headers = @{ 'X-AEGIS-API-KEY' = 'local-viewer-change-me' }
-Invoke-RestMethod http://localhost:8080/api/v1/dashboard -Headers $headers
+Invoke-RestMethod http://localhost:8080/actuator/health -Headers $headers
+Invoke-RestMethod http://localhost:8080/api/v1/market-data/status -Headers $headers
+Invoke-RestMethod 'http://localhost:8080/api/v1/dashboard?symbol=ETHUSDT&interval=15m' -Headers $headers
+Invoke-RestMethod http://localhost:8080/api/v1/pair-ranking -Headers $headers
+Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod http://localhost:8000/models
 ```
 
-## Windows PowerShell development
+The dashboard viewer key is compiled from `VITE_AEGIS_API_KEY` at image build time. Change both Compose/backend and frontend build values together.
+
+## IntelliJ / host development on Windows
 
 Start infrastructure:
 
 ```powershell
-docker compose up -d timescaledb redis
-docker compose ps
+docker compose up -d timescaledb redis ml-service
 ```
 
-Use the IntelliJ project SDK and bundled Maven to run `ai.aegis.AegisApplication`. Configure these safe environment variables in the run configuration:
+Run `ai.aegis.AegisApplication` from IntelliJ with its Java 21 SDK and these safe variables:
 
 ```text
-DB_URL=jdbc:postgresql://localhost:5432/aegis
+DB_URL=jdbc:postgresql://localhost:5433/aegis
 DB_USERNAME=aegis
 DB_PASSWORD=aegis
+ML_BASE_URL=http://localhost:8000
 AEGIS_VIEWER_API_KEY=local-viewer-change-me
 AEGIS_ADMIN_API_KEY=local-admin-change-me
+AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN=local-model-deployment-approval
 AEGIS_LIVE_EXECUTION_ENABLED=false
-BINANCE_INGESTION_ENABLED=false
-ML_BASE_URL=http://localhost:8000
+BINANCE_INGESTION_ENABLED=true
 ```
 
-ML service:
+ML development:
 
 ```powershell
 cd ml-service
-python -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Dashboard:
+Frontend development:
 
 ```powershell
 cd frontend
@@ -89,94 +114,92 @@ $env:VITE_AEGIS_API_KEY='local-viewer-change-me'
 npm run dev
 ```
 
-Open `http://localhost:3000` for Vite development or `http://localhost:3000` for the local full Compose stack.
-
 ## Builds and tests
 
+Use IntelliJ's bundled Maven if `mvn` is not on PATH:
+
 ```powershell
-cd backend
-mvn -B -ntp clean verify
+$env:JAVA_HOME='C:\Program Files\JetBrains\IntelliJ IDEA 2026.1.3\jbr'
+& 'C:\Program Files\JetBrains\IntelliJ IDEA 2026.1.3\plugins\maven\lib\maven3\bin\mvn.cmd' -B -ntp clean verify
+
 cd ..\frontend
 npm install
+npm run lint
 npm run build
+
 cd ..\ml-service
-.\.venv\Scripts\python.exe -m compileall app tests
+.\.venv\Scripts\python.exe -m compileall app scripts tests
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -c "from app.main import app; print(app.title)"
 ```
 
-Ordinary unit tests do not require a developer database. Clean Flyway/integration verification requires TimescaleDB.
+Ordinary unit tests do not depend on a developer database. Flyway verification requires TimescaleDB and must be run against an empty database without editing old migrations.
 
-## Full safe stack
+## Model training, approval, activation, and rollback
 
-```powershell
-docker compose up --build
-```
+Runtime training examples are captured once per closed symbol/timeframe observation only when the complete finite feature schema is usable. The scheduled labeler later assigns SHORT/WAIT/LONG without future leakage.
 
-Services: dashboard `:3000`, backend `:8080`, ML `:8000`, PostgreSQL `:5432`, Redis `:6379`.
-
-Production configuration validation/startup:
+Train a candidate directly from PostgreSQL:
 
 ```powershell
-Copy-Item .env.production.example .env.production
-# Replace every placeholder before continuing.
-docker compose --env-file .env.production -f docker-compose.prod.yml config
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+cd ml-service
+$env:AEGIS_TRAINING_DATABASE_URL='postgresql://aegis:aegis@localhost:5433/aegis'
+$env:AEGIS_ML_URL='http://localhost:8000'
+.\.venv\Scripts\python.exe -m scripts.train_from_postgres
 ```
 
-## ML training and activation
+At least 150 chronologically unique labelled examples with class diversity are required. Training never activates a model. It evaluates logistic, Random Forest, Extra Trees, Histogram Gradient Boosting, and the ensemble separately; uses chronological gaps and a final untouched holdout; calibrates only on temporal splits; and records balanced accuracy, macro F1, per-class precision/recall, log loss, Brier score, ECE/reliability, confusion matrix, fold stability, feature importance/redundancy, feature order, robust reference statistics, and the training range.
 
-Training accepts at least 150 chronologically ordered labelled examples. Each example must contain the exact same finite feature set and label `-1` (SHORT), `0` (WAIT), or `1` (LONG). Training produces a **candidate** only unless `activate` is explicitly requested; normal promotion is separate.
+Register the returned artifact/version through `POST /api/v1/admin/models`, evaluate `/{id}/approval`, then call `/{id}/activate` with the admin API key. Activation requires a passing database approval, a readable shared artifact, feature compatibility, and the separate ML deployment token. Rollback uses `POST /api/v1/admin/models/rollback`, preserves audit history, and is subject to the same approval/artifact gates.
 
-```powershell
-& .\.venv\Scripts\python.exe .\scripts\generate_synthetic_training.py | Set-Content .\.local-training.json
-$payload = Get-Content .\.local-training.json -Raw
-Invoke-RestMethod -Method Post -Uri http://localhost:8000/train -ContentType application/json -Body $payload
-Invoke-RestMethod http://localhost:8000/models
-```
+Synthetic generation under `ml-service/scripts` exists only for deterministic tests/smoke verification; it is not used by the live runtime path and does not claim predictive quality.
 
-For a deterministic in-process candidate/activation/prediction smoke test:
+## Prediction result lifecycle
 
-```powershell
-.\.venv\Scripts\python.exe -m scripts.smoke_train
-```
+Each prediction stores its symbol/timeframe/strategy/model, rule/ML/final directions, calibrated LONG/WAIT/SHORT probabilities, expected return/volatility, trade-quality and path probabilities, starting price, evaluation horizon, features, regime, trend/order-flow context, and risk levels.
 
-Validation uses a chronological `TimeSeriesSplit` with a configurable embargo gap between train and validation windows. It reports balanced accuracy, macro F1, Matthews correlation, Cohen's kappa, multiclass Brier score, log loss, per-class precision/recall, confusion matrices, class distribution, directional coverage/error, component results, fold dispersion, and worst-fold performance. Moving-block bootstrap intervals preserve local serial dependence and provide 95% uncertainty bounds for the principal scores. Promotion can require the lower confidence bound and worst-fold score, rather than trusting a favorable point estimate.
+The scheduled reconciler:
 
-The Random Forest, Extra Trees, and Histogram Gradient Boosting components are evaluated separately and as a soft-voting ensemble. Probability calibration is fitted only on chronological splits. Decision thresholds are chosen from out-of-fold validation probabilities. A conformal prediction set, normalized entropy, probability margin, robust feature drift, and schema checks force uncertain observations to `WAIT`; this is an abstention mechanism, not a promise of predictive accuracy.
+1. waits for the row-specific horizon;
+2. selects the first closed candle at or after it;
+3. calculates forward return from the exact prediction starting price;
+4. assigns LONG/WAIT/SHORT from the configured neutral zone;
+5. walks closed candles chronologically to determine stop-first/target-first, leaving a same-candle double hit explicitly ambiguous;
+6. updates only unresolved rows and never relabels history.
 
-Closed-candle feature engineering includes realized and downside volatility, bias-corrected return skewness and excess kurtosis, lag-one return autocorrelation, Parkinson and Garman-Klass range volatility, a log-price trend t-statistic, volume z-score, and Amihud illiquidity. Training labels use a volatility-adaptive neutral band with a configured floor. All feature order, reference medians, robust scales, and reference quantiles are stored with the artifact; missing, extra, NaN, or infinite inputs are rejected.
+Read `/api/v1/predictions/summary`, `/rolling`, and `/performance`. The performance endpoint supports symbol, timeframe, regime, strategy, model version, and rolling sample limits and reports class metrics, Brier/log loss, expected versus realized return, conversion, win rate, profit factor, Sharpe, Sortino, and drawdown when linked trades exist.
 
-Register the candidate with the backend admin API, evaluate it against configurable promotion thresholds, then activate the approved ID. Activation verifies approval, local artifact readability, feature schema, and records an audit row. Rollback uses `POST /api/v1/admin/models/rollback` and requires the historical version to remain approved and readable.
+## Live APIs
 
-## Prediction lifecycle
+- `/api/v1/markets`
+- `/api/v1/market-data/latest`, `/history`, `/status`, `/stream`
+- `/api/v1/market-structure`
+- `/api/v1/pair-ranking`, `/correlation`
+- `/api/v1/dashboard`
+- `/api/v1/predictions`, `/summary`, `/rolling`, `/performance`
+- `/api/v1/paper-orders`, `/api/v1/paper-trades`
+- `/actuator/health`, `/actuator/prometheus`
+- ML `/health`, `/models`, `/predict`, `/train`
 
-1. Guarded execution records symbol/timeframe, strategy, model version, rule/ML directions, three probabilities, confidence/margin, drift, feature snapshot, timestamp, and starting market price.
-2. The scheduled reconciler waits for `ML_LABEL_HORIZON_MINUTES` and selects the first closed candle at or after the horizon.
-3. Forward return is calculated from the prediction-time price. Returns above/below the configured neutral band become LONG/SHORT; values inside become WAIT.
-4. Correctness is direction equality. Resolved rows are never relabelled.
-5. Scheduled health snapshots calculate accuracy, directional precision, confidence, calibration error, class total-variation shift, feature-drift population stability index (PSI), unresolved count, and recent sample size with `HEALTHY`, `WATCH`, `DEGRADED`, or `HALTED` status.
-
-Read APIs:
-
-- `GET /api/v1/dashboard`
-- `GET /api/v1/predictions`
-- `GET /api/v1/predictions/summary`
-- `GET /api/v1/predictions/rolling`
-- `GET /api/v1/paper-trades`
-- `GET /actuator/health`
-- ML: `GET /health`, `GET /models`
+All `/api` routes require `X-AEGIS-API-KEY`; admin routes require the admin key. SSE uses authenticated `fetch` streaming because native `EventSource` cannot set the API-key header.
 
 ## Troubleshooting
 
-- **Flyway fails on `timescaledb`:** use the TimescaleDB image, not plain PostgreSQL. Do not edit an applied migration; add a later migration.
-- **Backend reports Java version errors:** select Java 21+ as IntelliJ's project SDK and Maven runner JRE.
-- **No analysis yet:** at least 30–35 validated closed candles are required.
-- **No active model:** expected after a clean install. Train, approve, and explicitly activate a compatible candidate.
-- **Prediction stays pending:** confirm a closed candle exists at/after the configured horizon and the prediction has `starting_price`.
-- **401:** provide the viewer/admin key in `X-AEGIS-API-KEY` and ensure Vite's `VITE_AEGIS_API_KEY` matches.
-- **Live order blocked:** expected. The current implementation has no signed production venue adapter and remains fail-closed even if a flag is accidentally changed.
+- Docker is installed but containers do not start: ensure Docker Desktop is running, then use `docker compose ps` and `docker compose logs backend ml-service`.
+- Port 5432 is already PostgreSQL: local Compose deliberately publishes TimescaleDB on `5433`.
+- No prediction probabilities: expected on a clean install until a candidate passes promotion and is explicitly activated. Rules still display, but new paper trade approval fails closed.
+- No training examples: wait for a full closed candle with `GOOD` live data and a complete feature vector; incomplete schemas are deliberately rejected.
+- Stream is stale: inspect `/api/v1/market-data/status`. The client reconnects and resubscribes with exponential backoff.
+- 401/403: make the viewer/admin key and the frontend build key agree. Model deployment additionally requires its separate token.
+- Flyway failure: use TimescaleDB, verify from an empty database, and add a later migration—never edit an already-applied one.
 
-## Safety disclaimer
+## Production Compose and safety
 
-AEGIS is research and paper-trading software, not financial advice. Real-money trading is disabled by default. Do not add exchange secrets to this repository. A production venue integration must independently implement signed adapters, testnet verification, price/quantity filters, reconciliation, and idempotency before live execution can ever be considered.
+```powershell
+docker compose -f docker-compose.prod.yml config
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+```
+
+Production Compose does not expose the ML service or database publicly. Replace every placeholder before starting it.
+
+AEGIS is research software, not financial advice. The repository has no signed production order adapter. Public Binance data may be consumed, but every generated order remains a paper order. Live execution stays fail-closed unless a future implementation independently provides an explicit flag, separate confirmation, admin authentication, signed adapter, testnet verification, venue filters, reconciliation, and idempotency.

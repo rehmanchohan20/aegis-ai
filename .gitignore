@@ -15,6 +15,7 @@ ml-service/.venv/
 *.py[cod]
 ml-service/models/
 ml-service/.local-training.json
+.local-runtime/
 
 # IDE
 .idea/

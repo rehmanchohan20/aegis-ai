@@ -3,6 +3,7 @@ package ai.aegis.orchestration;
 import ai.aegis.feature.CandleFeatureService;
 import ai.aegis.feature.FeatureSnapshot;
 import ai.aegis.market.Candle;
+import ai.aegis.ml.MlTrainingExampleCaptureService;
 import ai.aegis.strategy.CandidateSignal;
 import ai.aegis.strategy.StrategyEvaluator;
 import ai.aegis.strategy.StrategyRegistry;
@@ -18,13 +19,16 @@ public class DecisionCycleService {
     private final CandleFeatureService featureService;
     private final StrategyRegistry strategyRegistry;
     private final StrategyEvaluator strategyEvaluator;
+    private final MlTrainingExampleCaptureService trainingExamples;
 
     public DecisionCycleService(CandleFeatureService featureService,
                                 StrategyRegistry strategyRegistry,
-                                StrategyEvaluator strategyEvaluator) {
+                                StrategyEvaluator strategyEvaluator,
+                                MlTrainingExampleCaptureService trainingExamples) {
         this.featureService = featureService;
         this.strategyRegistry = strategyRegistry;
         this.strategyEvaluator = strategyEvaluator;
+        this.trainingExamples = trainingExamples;
     }
 
     public DecisionCycleResult run(List<Candle> candles) {
@@ -54,6 +58,10 @@ public class DecisionCycleService {
             }
         }
 
+        String selectedStrategy = eligible.isEmpty() ? null : eligible.getFirst().strategyId();
+        Instant observationTime = candles.stream().filter(Candle::closed).map(Candle::closeTime).max(Instant::compareTo)
+                .orElseThrow(() -> new IllegalArgumentException("at least one closed candle is required"));
+        trainingExamples.capture(snapshot, selectedStrategy, observationTime);
         return new DecisionCycleResult(snapshot.symbol(), snapshot.interval(), snapshot,
                 signals, direction, score, List.copyOf(reasons), Instant.now());
     }

@@ -1,6 +1,8 @@
 package ai.aegis.feature;
 
 import ai.aegis.market.Candle;
+import ai.aegis.market.MarketDataStateService;
+import ai.aegis.market.MarketSnapshot;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -14,6 +16,11 @@ import java.util.Map;
 @Service
 public class CandleFeatureService {
     private static final MathContext MC = new MathContext(12, RoundingMode.HALF_UP);
+    private final MarketDataStateService marketData;
+
+    public CandleFeatureService(MarketDataStateService marketData) {
+        this.marketData = marketData;
+    }
 
     public FeatureSnapshot build(List<Candle> input) {
         if (input == null || input.size() < 30) {
@@ -46,7 +53,48 @@ public class CandleFeatureService {
         add(features, "emaSlope20", emaSlope(candles, 20), latest);
         add(features, "atrNormalized14", normalizedAtr(candles, 14), latest);
         add(features, "closeLocation", ratio(latest.close().subtract(latest.low()), latest.high().subtract(latest.low())), latest);
+        addMicrostructure(features, marketData.latest(latest.symbol()), latest);
         return new FeatureSnapshot(latest.symbol(), latest.interval(), Instant.now(), features);
+    }
+
+    private void addMicrostructure(Map<String, FeatureValue> features, MarketSnapshot snapshot, Candle candle) {
+        if (snapshot == null) {
+            for (String name : List.of("spreadBps", "weightedMidDistance", "orderBookImbalance",
+                    "bidDepth", "askDepth", "aggressiveBuySellRatio", "cumulativeDeltaNormalized",
+                    "tradeIntensity", "averageTradeSize", "microRealizedVolatility", "volumeAcceleration",
+                    "ingestionLatencySeconds")) {
+                features.put(name, new FeatureValue(name, null, candle.closeTime(), FeatureQuality.MISSING, "binance-stream"));
+            }
+            return;
+        }
+        FeatureQuality quality = "GOOD".equals(snapshot.dataQuality()) ? FeatureQuality.GOOD : FeatureQuality.STALE;
+        micro(features, "spreadBps", snapshot.spreadBps(), snapshot, quality);
+        BigDecimal weightedDistance = snapshot.weightedMidPrice() == null || snapshot.lastPrice().signum() == 0 ? null
+                : snapshot.weightedMidPrice().subtract(snapshot.lastPrice(), MC).divide(snapshot.lastPrice(), MC);
+        micro(features, "weightedMidDistance", weightedDistance, snapshot, quality);
+        micro(features, "orderBookImbalance", snapshot.orderBookImbalance(), snapshot, quality);
+        micro(features, "bidDepth", logOnePlus(snapshot.bidDepth()), snapshot, quality);
+        micro(features, "askDepth", logOnePlus(snapshot.askDepth()), snapshot, quality);
+        BigDecimal sellFloor = snapshot.aggressiveSellVolume().max(BigDecimal.valueOf(0.00000001));
+        micro(features, "aggressiveBuySellRatio", snapshot.aggressiveBuyVolume().divide(sellFloor, MC), snapshot, quality);
+        BigDecimal flowVolume = snapshot.aggressiveBuyVolume().add(snapshot.aggressiveSellVolume(), MC);
+        micro(features, "cumulativeDeltaNormalized", flowVolume.signum() == 0 ? BigDecimal.ZERO
+                : snapshot.aggressiveBuyVolume().subtract(snapshot.aggressiveSellVolume(), MC).divide(flowVolume, MC), snapshot, quality);
+        micro(features, "tradeIntensity", snapshot.tradeIntensity(), snapshot, quality);
+        micro(features, "averageTradeSize", snapshot.averageTradeSize(), snapshot, quality);
+        micro(features, "microRealizedVolatility", snapshot.realizedVolatility(), snapshot, quality);
+        micro(features, "volumeAcceleration", snapshot.volumeAcceleration(), snapshot, quality);
+        micro(features, "ingestionLatencySeconds", BigDecimal.valueOf(snapshot.ingestionLatencyMs(), 3), snapshot, quality);
+    }
+
+    private void micro(Map<String, FeatureValue> features, String name, BigDecimal value,
+                       MarketSnapshot snapshot, FeatureQuality quality) {
+        features.put(name, new FeatureValue(name, value, snapshot.exchangeTime(),
+                value == null ? FeatureQuality.MISSING : quality, "binance-stream"));
+    }
+
+    private BigDecimal logOnePlus(BigDecimal value) {
+        return value == null ? null : finite(Math.log1p(Math.max(0.0, value.doubleValue())));
     }
 
     private void add(Map<String, FeatureValue> map, String name, BigDecimal value, Candle candle) {

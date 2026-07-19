@@ -12,7 +12,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class RealtimeAutomationService {
@@ -21,40 +23,47 @@ public class RealtimeAutomationService {
     private final CandleStore candleStore;
     private final DecisionCycleService decisionCycleService;
     private final StrategyAttributionStore attributionStore;
-    private final String symbol;
-    private final String interval;
+    private final List<String> symbols;
+    private final List<String> intervals;
     private final boolean enabled;
-    private final AtomicReference<DecisionCycleResult> latest = new AtomicReference<>();
+    private final Map<String, DecisionCycleResult> latest = new ConcurrentHashMap<>();
 
     public RealtimeAutomationService(CandleStore candleStore,
                                      DecisionCycleService decisionCycleService,
                                      StrategyAttributionStore attributionStore,
-                                     @Value("${aegis.automation.symbol:BTCUSDT}") String symbol,
-                                     @Value("${aegis.automation.interval:1m}") String interval,
+                                     @Value("${aegis.market.symbols:BTCUSDT}") String symbols,
+                                     @Value("${aegis.market.intervals:1m}") String intervals,
                                      @Value("${aegis.automation.enabled:true}") boolean enabled) {
         this.candleStore = candleStore;
         this.decisionCycleService = decisionCycleService;
         this.attributionStore = attributionStore;
-        this.symbol = symbol.toUpperCase();
-        this.interval = interval;
+        this.symbols = Arrays.stream(symbols.split(",")).map(String::trim).filter(value -> !value.isBlank())
+                .map(String::toUpperCase).distinct().toList();
+        this.intervals = Arrays.stream(intervals.split(",")).map(String::trim)
+                .filter(value -> !value.isBlank()).distinct().toList();
         this.enabled = enabled;
     }
 
     @Scheduled(fixedDelayString = "${aegis.automation.delay-ms:15000}")
     public void runCycle() {
         if (!enabled) return;
-        try {
-            List<Candle> candles = candleStore.latest(symbol, interval, 250).stream().filter(Candle::closed).toList();
-            if (candles.size() < 30) return;
-            DecisionCycleResult result = decisionCycleService.run(candles);
-            attributionStore.save(result);
-            latest.set(result);
-        } catch (Exception exception) {
-            log.warn("Automated decision cycle failed for {} {}", symbol, interval, exception);
+        for (String symbol : symbols) for (String interval : intervals) {
+            try {
+                List<Candle> candles = candleStore.latest(symbol, interval, 250).stream().filter(Candle::closed).toList();
+                if (candles.size() < 30) continue;
+                DecisionCycleResult result = decisionCycleService.run(candles);
+                attributionStore.save(result);
+                latest.put(key(symbol, interval), result);
+            } catch (Exception exception) {
+                log.warn("Automated decision cycle failed for {} {}", symbol, interval, exception);
+            }
         }
     }
 
-    public DecisionCycleResult latest() {
-        return latest.get();
+    public DecisionCycleResult latest(String symbol, String interval) {
+        if (symbol == null || symbol.isBlank() || interval == null || interval.isBlank()) return null;
+        return latest.get(key(symbol, interval));
     }
+
+    private static String key(String symbol, String interval) { return symbol.toUpperCase() + ":" + interval; }
 }

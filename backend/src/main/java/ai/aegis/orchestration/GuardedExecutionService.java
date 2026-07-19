@@ -12,6 +12,15 @@ import ai.aegis.ml.MlPredictionClient;
 import ai.aegis.ml.PredictionAuditService;
 import ai.aegis.paper.PaperTrade;
 import ai.aegis.paper.PaperTradingService;
+import ai.aegis.paper.PaperOrder;
+import ai.aegis.paper.PaperOrderService;
+import ai.aegis.market.MarketDataStateService;
+import ai.aegis.market.MarketSnapshot;
+import ai.aegis.analysis.MultiTimeframeAnalysisService;
+import ai.aegis.analysis.MultiTimeframeDecision;
+import ai.aegis.structure.MarketStructureService;
+import ai.aegis.structure.MarketStructureSnapshot;
+import ai.aegis.ranking.PairRankingService;
 import ai.aegis.risk.RiskEngine;
 import ai.aegis.risk.RiskPlan;
 import ai.aegis.supervisor.SupervisorDecision;
@@ -37,6 +46,11 @@ public class GuardedExecutionService {
     private final TradeJournalStore journalStore;
     private final MlPredictionClient mlPredictionClient;
     private final PredictionAuditService predictionAuditService;
+    private final PaperOrderService paperOrderService;
+    private final MarketDataStateService marketData;
+    private final MultiTimeframeAnalysisService multiTimeframe;
+    private final MarketStructureService marketStructure;
+    private final PairRankingService pairRanking;
 
     public GuardedExecutionService(DecisionCycleService decisionCycleService,
                                    TradeAdmissionService admissionService,
@@ -45,7 +59,12 @@ public class GuardedExecutionService {
                                    PaperTradingService paperTradingService,
                                    TradeJournalStore journalStore,
                                    MlPredictionClient mlPredictionClient,
-                                   PredictionAuditService predictionAuditService) {
+                                   PredictionAuditService predictionAuditService,
+                                   PaperOrderService paperOrderService,
+                                   MarketDataStateService marketData,
+                                   MultiTimeframeAnalysisService multiTimeframe,
+                                   MarketStructureService marketStructure,
+                                   PairRankingService pairRanking) {
         this.decisionCycleService = decisionCycleService;
         this.admissionService = admissionService;
         this.supervisorEngine = supervisorEngine;
@@ -54,6 +73,11 @@ public class GuardedExecutionService {
         this.journalStore = journalStore;
         this.mlPredictionClient = mlPredictionClient;
         this.predictionAuditService = predictionAuditService;
+        this.paperOrderService = paperOrderService;
+        this.marketData = marketData;
+        this.multiTimeframe = multiTimeframe;
+        this.marketStructure = marketStructure;
+        this.pairRanking = pairRanking;
     }
 
     public GuardedExecutionResult execute(GuardedExecutionRequest request) {
@@ -62,6 +86,33 @@ public class GuardedExecutionService {
         Candle latest = request.candles().stream().filter(Candle::closed).reduce((a, b) -> b)
                 .orElseThrow(() -> new IllegalArgumentException("at least one closed candle is required"));
         BigDecimal entry = latest.close();
+        MarketSnapshot liveMarket = marketData.latest(cycle.symbol());
+        boolean marketContextApproved = liveMarket != null && "GOOD".equals(liveMarket.dataQuality());
+        if (!marketContextApproved) reasons.add("Real-time market data is missing, stale, or degraded");
+        if (liveMarket != null && liveMarket.spreadBps() != null
+                && liveMarket.spreadBps().compareTo(BigDecimal.valueOf(20)) > 0) {
+            marketContextApproved = false;
+            reasons.add("Bid-ask spread exceeds 20 bps execution ceiling");
+        }
+        MultiTimeframeDecision timeframeContext = multiTimeframe.analyze(cycle.symbol());
+        if (!"WAIT".equals(cycle.finalDirection())
+                && (!timeframeContext.approved() || !cycle.finalDirection().equals(timeframeContext.decision()))) {
+            marketContextApproved = false;
+            reasons.addAll(timeframeContext.reasons());
+        }
+        PairRankingService.CorrelationContext correlation = pairRanking.correlationContext(cycle.symbol());
+        if (!correlation.approved()) {
+            marketContextApproved = false;
+            reasons.add(correlation.reason());
+        }
+        MarketStructureSnapshot structure = marketStructure.latestOrCalculate(cycle.symbol(), cycle.interval());
+        if (structure != null) {
+            reasons.add("Market structure " + structure.structureState() + ", breakout " + structure.breakoutState());
+            if ("TRANSITION_CHOCH_RISK".equals(structure.structureState())) {
+                marketContextApproved = false;
+                reasons.add("Change-of-character transition blocks new directional exposure");
+            }
+        }
         BigDecimal normalizedAtr = cycle.featureSnapshot().usableValue("atrNormalized14").orElse(BigDecimal.ZERO);
         BigDecimal atr = entry.multiply(normalizedAtr);
         RiskPlan riskPlan = riskEngine.build(cycle.finalDirection(), entry, atr);
@@ -74,8 +125,12 @@ public class GuardedExecutionService {
         try {
             mlPrediction = mlPredictionClient.predict(cycle.featureSnapshot());
             predictionId = predictionAuditService.record(cycle.symbol(), cycle.interval(), strategyId,
-                    cycle.finalDirection(), mlPrediction, cycle.featureSnapshot(), entry);
-            if ("WAIT".equals(mlPrediction.decision())) {
+                    cycle.finalDirection(), mlPrediction, cycle.featureSnapshot(), entry,
+                    riskPlan, structure, liveMarket);
+            if ("HALTED".equals(mlPrediction.driftStatus()) || "DEGRADED".equals(mlPrediction.driftStatus())) {
+                mlApproved = false;
+                reasons.add("ML approval blocked by model drift status " + mlPrediction.driftStatus());
+            } else if ("WAIT".equals(mlPrediction.decision())) {
                 reasons.add("ML model is neutral; rules remain primary"
                         + (mlPrediction.uncertaintyStatus() == null ? ""
                         : " (uncertainty " + mlPrediction.uncertaintyStatus() + ")"));
@@ -88,7 +143,8 @@ public class GuardedExecutionService {
                         + " at confidence " + mlPrediction.confidence());
             }
         } catch (RuntimeException unavailable) {
-            reasons.add("ML service or prediction audit unavailable; fail-safe rule engine remains active");
+            mlApproved = false;
+            reasons.add("ML service, active artifact, or prediction audit unavailable; new trade approval fails closed");
         }
 
         if ("WAIT".equals(cycle.finalDirection()) || !"VALID".equals(riskPlan.status())) {
@@ -139,7 +195,7 @@ public class GuardedExecutionService {
         reasons.addAll(admission.blockers());
 
         SupervisorDecision supervisor = supervisorEngine.decide(cycle.featureSnapshot(), cycle.candidateSignals(),
-                request.riskApproved() && admission.approved() && mlApproved,
+                request.riskApproved() && admission.approved() && mlApproved && marketContextApproved,
                 request.strategyHealthy(), request.executionHealthy());
         reasons.addAll(supervisor.approvals());
         reasons.addAll(supervisor.vetoes());
@@ -150,8 +206,22 @@ public class GuardedExecutionService {
                     status, reasons, Instant.now());
         }
 
+        PaperOrder order = paperOrderService.submit(new PaperOrderService.OrderRequest(null, cycle.symbol(),
+                cycle.interval(), supervisor.side(), "MARKET", quantity, null, null,
+                Instant.now().plusSeconds(10)));
+        if (order.filledQuantity().signum() <= 0 || order.averageFillPrice() == null) {
+            reasons.add("Paper order did not fill: " + (order.rejectionReason() == null ? order.status() : order.rejectionReason()));
+            return new GuardedExecutionResult(cycle, supervisor, riskPlan, quantity, null,
+                    "PAPER_ORDER_NOT_FILLED", reasons, Instant.now());
+        }
+        BigDecimal fill = order.averageFillPrice();
+        BigDecimal targetDistance = riskPlan.takeProfit1().subtract(riskPlan.entry()).abs();
+        BigDecimal adjustedStop = "LONG".equals(supervisor.side()) ? fill.subtract(stopDistance) : fill.add(stopDistance);
+        BigDecimal adjustedTarget = "LONG".equals(supervisor.side()) ? fill.add(targetDistance) : fill.subtract(targetDistance);
         PaperTrade trade = paperTradingService.open(cycle.symbol(), cycle.interval(), supervisor.side(),
-                riskPlan.entry(), riskPlan.stopLoss(), riskPlan.takeProfit1(), quantity);
+                fill, adjustedStop, adjustedTarget, order.filledQuantity());
+        trade = paperTradingService.applyExecutionCosts(trade.id(), fill, order.fee(), order.slippage());
+        paperOrderService.linkTrade(order.id(), trade.id());
         Map<String, BigDecimal> probabilities = mlPrediction == null ? Map.of() : Map.of(
                 "LONG", mlPrediction.longProbability(), "WAIT", mlPrediction.waitProbability(),
                 "SHORT", mlPrediction.shortProbability());
@@ -161,7 +231,9 @@ public class GuardedExecutionService {
                 trade.openedAt(), trade.closedAt(), strategyId, mlPrediction == null ? null : mlPrediction.model(),
                 cycle.finalDirection(), mlPrediction == null ? null : mlPrediction.decision(), probabilities,
                 predictionId, riskPlan, null, null));
-        reasons.add("Paper trade opened and journaled: " + trade.id());
+        journalStore.updateExecutionCosts(trade.id(), fill, order.fee(), order.slippage(), order.firstFillAt());
+        reasons.add("Paper trade opened from " + order.status() + " depth-aware order " + order.id()
+                + " with fees " + order.fee() + " and slippage " + order.slippage());
         return new GuardedExecutionResult(cycle, supervisor, riskPlan, quantity, trade,
                 "PAPER_TRADE_OPENED", reasons, Instant.now());
     }

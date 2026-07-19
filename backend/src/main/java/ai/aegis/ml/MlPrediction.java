@@ -17,7 +17,13 @@ public record MlPrediction(
         BigDecimal entropy,
         List<String> predictionSet,
         String uncertaintyStatus,
-        Map<String, BigDecimal> featureDriftContributions
+        Map<String, BigDecimal> featureDriftContributions,
+        BigDecimal expectedReturn,
+        BigDecimal expectedVolatility,
+        BigDecimal stopHitProbability,
+        BigDecimal targetHitProbability,
+        BigDecimal tradeQualityScore,
+        BigDecimal estimatedExecutionCostRate
 ) {
     public MlPrediction {
         predictionSet = List.copyOf(predictionSet == null ? List.of() : predictionSet);
@@ -28,6 +34,7 @@ public record MlPrediction(
                         String decision, BigDecimal confidence, String model, BigDecimal confidenceMargin,
                         BigDecimal featureDriftScore, String driftStatus) {
         this(longProbability, waitProbability, shortProbability, decision, confidence, model,
-                confidenceMargin, featureDriftScore, driftStatus, null, List.of(), null, Map.of());
+                confidenceMargin, featureDriftScore, driftStatus, null, List.of(), null, Map.of(),
+                null, null, null, null, null, null);
     }
 }

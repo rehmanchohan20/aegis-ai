@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 import json
 import math
+import os
+import secrets
 import uuid
 
 import joblib
@@ -14,10 +16,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sklearn.base import clone
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier, VotingClassifier
+from sklearn.ensemble import (ExtraTreesClassifier, HistGradientBoostingClassifier,
+                              HistGradientBoostingRegressor, RandomForestClassifier,
+                              RandomForestRegressor, VotingClassifier)
+from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (accuracy_score, balanced_accuracy_score, confusion_matrix, f1_score,
                              cohen_kappa_score, log_loss, matthews_corrcoef,
-                             precision_recall_fscore_support)
+                             mean_absolute_error, precision_recall_fscore_support)
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler
@@ -28,7 +34,7 @@ REGISTRY_PATH = MODEL_DIR / "registry.json"
 ACTIVE_PATH = MODEL_DIR / "active.json"
 
 app = FastAPI(title="AEGIS ML Service", version="1.2.0")
-ARTIFACT_SCHEMA_VERSION = 3
+ARTIFACT_SCHEMA_VERSION = 4
 CLASS_LABELS = np.asarray([-1, 0, 1])
 CLASS_NAMES = {-1: "SHORT", 0: "WAIT", 1: "LONG"}
 
@@ -37,6 +43,10 @@ class TrainingExample(BaseModel):
     features: dict[str, float]
     label: int = Field(ge=-1, le=1)
     observedAt: str | None = None
+    forwardReturn: float | None = None
+    forwardVolatility: float | None = Field(default=None, ge=0.0)
+    stopHitFirst: bool | None = None
+    targetHitFirst: bool | None = None
 
 
 class TrainingRequest(BaseModel):
@@ -55,6 +65,7 @@ class PredictionRequest(BaseModel):
 class ActivationRequest(BaseModel):
     model_name: str
     version: str
+    approval_token: str
 
 
 def load_json(path: Path, fallback: Any) -> Any:
@@ -81,6 +92,8 @@ def component_models() -> dict[str, Pipeline]:
     def pipeline(estimator: Any) -> Pipeline:
         return Pipeline([("scale", RobustScaler()), ("classifier", estimator)])
     return {
+        "calibratedLogisticBaseline": pipeline(LogisticRegression(
+            C=0.35, class_weight="balanced", max_iter=2000, random_state=41)),
         "randomForest": pipeline(RandomForestClassifier(
             n_estimators=180, max_depth=10, min_samples_leaf=5,
             class_weight="balanced_subsample", random_state=42, n_jobs=-1)),
@@ -97,11 +110,12 @@ def build_model() -> VotingClassifier:
     components = component_models()
     return VotingClassifier(
         estimators=[
+            ("logistic", components["calibratedLogisticBaseline"]),
             ("rf", components["randomForest"]),
             ("extra", components["extraTrees"]),
             ("hist", components["histGradientBoosting"]),
         ],
-        voting="soft", weights=[0.42, 0.38, 0.20], flatten_transform=True,
+        voting="soft", weights=[0.15, 0.30, 0.30, 0.25], flatten_transform=True,
     )
 
 
@@ -127,6 +141,17 @@ def _metric_summary(actual_array: np.ndarray, predicted_array: np.ndarray,
     multiclass_brier = float(np.mean(np.sum(np.square(probability_array - one_hot), axis=1)))
     directional_mask = predicted_array != 0
     false_directional_rate = float(np.mean((predicted_array != actual_array) & directional_mask))
+    confidence = probability_array.max(axis=1)
+    correctness = (actual_array == predicted_array).astype(float)
+    reliability: list[dict[str, float | int]] = []
+    for lower in np.linspace(0.0, 0.9, 10):
+        upper = lower + 0.1
+        included = (confidence >= lower) & (confidence < upper if upper < 1.0 else confidence <= upper)
+        if np.any(included):
+            reliability.append({"lower": float(lower), "upper": float(upper),
+                                "meanConfidence": float(np.mean(confidence[included])),
+                                "observedAccuracy": float(np.mean(correctness[included])),
+                                "samples": int(np.sum(included))})
     return {
         "accuracy": float(accuracy_score(actual_array, predicted_array)),
         "balancedAccuracy": float(balanced_accuracy_score(actual_array, predicted_array)),
@@ -139,6 +164,7 @@ def _metric_summary(actual_array: np.ndarray, predicted_array: np.ndarray,
         "directionalPrecision": float((precision[0] + precision[2]) / 2.0),
         "directionalCoverage": float(np.mean(directional_mask)),
         "falseDirectionalRate": false_directional_rate,
+        "reliabilityCurve": reliability,
         "validationSampleCount": int(len(actual_array)),
         "classDistribution": distribution,
         "confusionMatrix": confusion_matrix(actual_array, predicted_array, labels=CLASS_LABELS).tolist(),
@@ -279,6 +305,9 @@ def models() -> dict:
 
 @app.post("/models/activate")
 def activate(request: ActivationRequest) -> dict:
+    configured_token = os.getenv("AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN", "DISABLED")
+    if configured_token == "DISABLED" or not secrets.compare_digest(request.approval_token, configured_token):
+        raise HTTPException(status_code=403, detail="Valid deployment approval token required")
     path = artifact_path(request.model_name, request.version)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Model artifact not found")
@@ -296,9 +325,16 @@ def rollback(request: ActivationRequest) -> dict:
 
 @app.post("/train")
 def train(request: TrainingRequest) -> dict:
-    examples = sorted(request.examples, key=lambda item: item.observedAt or "") if all(e.observedAt for e in request.examples) else request.examples
+    if request.activate:
+        raise HTTPException(status_code=400, detail="Training and activation are separate approval-gated operations")
+    if not all(example.observedAt for example in request.examples):
+        raise HTTPException(status_code=400, detail="Every training example requires an observedAt timestamp")
+    examples = sorted(request.examples, key=lambda item: item.observedAt or "")
     if len(examples) < 150:
         raise HTTPException(status_code=400, detail="At least 150 labelled examples are required")
+    timestamps = [example.observedAt for example in examples]
+    if len(set(timestamps)) != len(timestamps):
+        raise HTTPException(status_code=400, detail="Duplicate observation timestamps are not allowed")
     feature_names = sorted(examples[0].features.keys())
     if not feature_names:
         raise HTTPException(status_code=400, detail="Feature set cannot be empty")
@@ -314,49 +350,106 @@ def train(request: TrainingRequest) -> dict:
     if len(set(labels)) < 3:
         raise HTTPException(status_code=400, detail="Training requires SHORT, WAIT and LONG examples")
 
-    validation = temporal_validation(frame, np.asarray(labels), request.validation_gap)
-    model = build_model()
+    holdout_count = max(30, int(round(len(frame) * 0.15)))
+    development_count = len(frame) - holdout_count
+    if development_count < 120:
+        raise HTTPException(status_code=400, detail="Insufficient development samples before final holdout")
+    development_frame = frame.iloc[:development_count]
+    holdout_frame = frame.iloc[development_count:]
     label_array = np.asarray(labels)
-    calibration_gap = min(request.validation_gap, max(0, len(frame) // 20))
-    calibration_splits = list(TimeSeriesSplit(n_splits=3, gap=calibration_gap).split(frame))
-    can_calibrate = all(len(set(label_array[train_index])) == 3 for train_index, _ in calibration_splits)
+    development_labels = label_array[:development_count]
+    holdout_labels = label_array[development_count:]
+    if len(set(development_labels)) < 3 or len(set(holdout_labels)) < 2:
+        raise HTTPException(status_code=400, detail="Chronological development and holdout sets need class diversity")
+    validation = temporal_validation(development_frame, development_labels, request.validation_gap)
+    model = build_model()
+    calibration_gap = min(request.validation_gap, max(0, len(development_frame) // 20))
+    calibration_splits = list(TimeSeriesSplit(n_splits=3, gap=calibration_gap).split(development_frame))
+    can_calibrate = all(len(set(development_labels[train_index])) == 3 for train_index, _ in calibration_splits)
     fitted_model: Any
     calibration_method = "none"
     if can_calibrate:
         fitted_model = CalibratedClassifierCV(estimator=model, method="sigmoid", cv=calibration_splits)
-        fitted_model.fit(frame, label_array)
+        fitted_model.fit(development_frame, development_labels)
         calibration_method = "sigmoid-TimeSeriesSplit"
     else:
-        fitted_model = model.fit(frame, label_array)
+        fitted_model = model.fit(development_frame, development_labels)
+    holdout_probabilities = normalize_probabilities(fitted_model, holdout_frame)
+    holdout_predictions = CLASS_LABELS[holdout_probabilities.argmax(axis=1)]
+    holdout_metrics = _metric_summary(holdout_labels, holdout_predictions, holdout_probabilities)
+    importance = permutation_importance(fitted_model, holdout_frame, holdout_labels,
+                                        scoring="balanced_accuracy", n_repeats=3, random_state=47)
+    feature_importance = dict(sorted(zip(feature_names, map(float, importance.importances_mean)),
+                                     key=lambda item: item[1], reverse=True))
+    auxiliary_models: dict[str, Any] = {}
+    auxiliary_metrics: dict[str, Any] = {}
+    forward_returns = np.asarray([example.forwardReturn if example.forwardReturn is not None else np.nan for example in examples])
+    forward_volatility = np.asarray([example.forwardVolatility if example.forwardVolatility is not None else np.nan for example in examples])
+    if np.isfinite(forward_returns[:development_count]).all() and np.isfinite(forward_returns[development_count:]).all():
+        return_model = Pipeline([("scale", RobustScaler()), ("regressor", RandomForestRegressor(
+            n_estimators=220, max_depth=9, min_samples_leaf=5, random_state=51, n_jobs=-1))])
+        return_model.fit(development_frame, forward_returns[:development_count])
+        auxiliary_models["expected_return"] = return_model
+        auxiliary_metrics["expectedReturnMae"] = float(mean_absolute_error(
+            forward_returns[development_count:], return_model.predict(holdout_frame)))
+    if np.isfinite(forward_volatility[:development_count]).all() and np.isfinite(forward_volatility[development_count:]).all():
+        volatility_model = Pipeline([("scale", RobustScaler()), ("regressor", HistGradientBoostingRegressor(
+            max_iter=180, max_depth=6, learning_rate=.045, l2_regularization=1.0, random_state=52))])
+        volatility_model.fit(development_frame, forward_volatility[:development_count])
+        auxiliary_models["expected_volatility"] = volatility_model
+        auxiliary_metrics["expectedVolatilityMae"] = float(mean_absolute_error(
+            forward_volatility[development_count:], volatility_model.predict(holdout_frame)))
+    for field_name, artifact_name in (("stopHitFirst", "stop_hit_first"), ("targetHitFirst", "target_hit_first")):
+        values = [getattr(example, field_name) for example in examples]
+        if all(value is not None for value in values) and len(set(values[:development_count])) == 2:
+            binary_model = Pipeline([("scale", RobustScaler()), ("classifier", HistGradientBoostingClassifier(
+                max_iter=140, max_depth=5, learning_rate=.05, l2_regularization=1.0, random_state=53))])
+            binary_model.fit(development_frame, np.asarray(values[:development_count], dtype=int))
+            auxiliary_models[artifact_name] = binary_model
+            auxiliary_metrics[artifact_name + "Accuracy"] = float(accuracy_score(
+                np.asarray(values[development_count:], dtype=int), binary_model.predict(holdout_frame)))
     version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
     path = artifact_path(request.model_name, version)
     reference = {
-        name: {"mean": float(frame[name].mean()), "std": float(max(frame[name].std(), 1e-9)),
-               "median": float(frame[name].median()),
-               "quantiles": [float(value) for value in frame[name].quantile([0, .1, .25, .5, .75, .9, 1]).tolist()]}
+        name: {"mean": float(development_frame[name].mean()), "std": float(max(development_frame[name].std(), 1e-9)),
+               "median": float(development_frame[name].median()), "missingRate": 0.0,
+               "quantiles": [float(value) for value in development_frame[name].quantile([0, .1, .25, .5, .75, .9, 1]).tolist()]}
         for name in feature_names
     }
+    correlations = development_frame.corr(method="spearman").abs()
+    redundant_pairs = [{"left": feature_names[left], "right": feature_names[right],
+                        "absoluteSpearman": float(correlations.iloc[left, right])}
+                       for left in range(len(feature_names)) for right in range(left + 1, len(feature_names))
+                       if float(correlations.iloc[left, right]) >= .92]
     chosen_margin = max(float(request.minimum_margin), float(validation["chosenMinimumMargin"]))
     artifact = {"schema_version": ARTIFACT_SCHEMA_VERSION, "model": fitted_model,
+                "auxiliary_models": auxiliary_models,
                 "features": feature_names, "version": version,
                 "model_name": request.model_name, "minimum_margin": chosen_margin,
                 "training_reference": reference, "validation": validation,
                 "conformal_nonconformity_quantile": validation["conformalNonconformityQuantile"],
                 "conformal_alpha": validation["conformalAlpha"],
                 "calibration_method": calibration_method,
+                "holdout_metrics": holdout_metrics, "auxiliary_metrics": auxiliary_metrics,
+                "feature_importance": feature_importance, "redundant_feature_pairs": redundant_pairs,
+                "training_range": {"start": examples[0].observedAt, "developmentEnd": examples[development_count - 1].observedAt,
+                                   "holdoutStart": examples[development_count].observedAt, "end": examples[-1].observedAt},
+                "code_version": os.getenv("AEGIS_CODE_VERSION", "local-uncommitted"),
                 "trained_at": datetime.now(timezone.utc).isoformat()}
     joblib.dump(artifact, path)
 
     registry = load_json(REGISTRY_PATH, [])
     registry.append({"modelName": request.model_name, "version": version, "artifact": str(path),
-                     "features": feature_names, "metrics": validation, "minimumMargin": chosen_margin,
+                     "features": feature_names, "metrics": {**validation, "finalHoldout": holdout_metrics,
+                                                               "auxiliary": auxiliary_metrics},
+                     "featureImportance": feature_importance, "redundantFeaturePairs": redundant_pairs,
                      "artifactSchemaVersion": ARTIFACT_SCHEMA_VERSION, "calibrationMethod": calibration_method,
                      "createdAt": datetime.now(timezone.utc).isoformat(), "status": "CANDIDATE"})
     save_json(REGISTRY_PATH, registry)
-    if request.activate:
-        activate(ActivationRequest(model_name=request.model_name, version=version))
     return {"status": "TRAINED", "modelName": request.model_name, "version": version,
-            "examples": len(examples), "features": feature_names, "validation": validation}
+            "examples": len(examples), "features": feature_names, "validation": validation,
+            "finalHoldout": holdout_metrics, "auxiliary": auxiliary_metrics,
+            "featureImportance": feature_importance, "redundantFeaturePairs": redundant_pairs}
 
 
 @app.post("/predict")
@@ -425,12 +518,41 @@ def predict(request: PredictionRequest) -> dict:
     if len(prediction_set) != 1:
         decision = "WAIT"
 
+    auxiliary = artifact.get("auxiliary_models", {})
+    expected_return = float(auxiliary["expected_return"].predict(row)[0]) if "expected_return" in auxiliary else 0.0
+    expected_volatility = max(0.0, float(auxiliary["expected_volatility"].predict(row)[0])) \
+        if "expected_volatility" in auxiliary else 0.0
+
+    def probability_true(model: Any) -> float:
+        probabilities = model.predict_proba(row)[0]
+        classes = list(model.classes_)
+        return float(probabilities[classes.index(1)]) if 1 in classes else 0.0
+
+    directional_probability = max(long_probability, short_probability)
+    stop_hit_probability = probability_true(auxiliary["stop_hit_first"]) if "stop_hit_first" in auxiliary \
+        else float(1.0 - directional_probability)
+    target_hit_probability = probability_true(auxiliary["target_hit_first"]) if "target_hit_first" in auxiliary \
+        else float(directional_probability)
+    risk_adjusted_return = abs(expected_return) / max(expected_volatility, 1e-6) if expected_volatility > 0 else 0.0
+    trade_quality_score = 100.0 * (0.35 * directional_probability + 0.20 * target_hit_probability
+                                   + 0.20 * (1.0 - entropy) + 0.25 * math.tanh(risk_adjusted_return))
+    trade_quality_score *= max(0.0, 1.0 - min(drift_score, 5.0) / 5.0)
+    spread_bps = float(request.features.get("spreadBps", 0.0))
+    estimated_cost_rate = max(0.0, spread_bps) / 10_000.0 + 0.0015
+    if "expected_return" in auxiliary and abs(expected_return) <= estimated_cost_rate:
+        decision = "WAIT"
+    if stop_hit_probability >= target_hit_probability or trade_quality_score < 55.0:
+        decision = "WAIT"
+
     return {"longProbability": long_probability, "waitProbability": wait_probability,
             "shortProbability": short_probability, "decision": decision, "confidence": ordered[0],
             "confidenceMargin": margin, "entropy": entropy,
             "predictionSet": prediction_set, "uncertaintyStatus": uncertainty_status,
             "model": f"{request.model_name}:{version}",
-            "ensemble": ["random-forest", "extra-trees", "hist-gradient-boosting"],
+            "ensemble": ["calibrated-logistic", "random-forest", "extra-trees", "hist-gradient-boosting"],
+            "expectedReturn": expected_return, "expectedVolatility": expected_volatility,
+            "stopHitProbability": stop_hit_probability, "targetHitProbability": target_hit_probability,
+            "tradeQualityScore": trade_quality_score, "estimatedExecutionCostRate": estimated_cost_rate,
             "featureDriftScore": drift_score,
             "featureDriftContributions": dict(sorted(drift_contributions.items(),
                                                      key=lambda item: item[1], reverse=True)),

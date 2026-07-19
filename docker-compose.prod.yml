@@ -19,6 +19,8 @@ services:
     restart: unless-stopped
     volumes:
       - ml-models:/app/models
+    environment:
+      AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN: ${AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -40,11 +42,14 @@ services:
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       ML_BASE_URL: http://ml-service:8000
+      AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN: ${AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN}
       AEGIS_VIEWER_API_KEY: ${AEGIS_VIEWER_API_KEY}
       AEGIS_ADMIN_API_KEY: ${AEGIS_ADMIN_API_KEY}
       AEGIS_EXECUTION_CONFIRMATION_TOKEN: ${AEGIS_EXECUTION_CONFIRMATION_TOKEN}
       AEGIS_LIVE_EXECUTION_ENABLED: ${AEGIS_LIVE_EXECUTION_ENABLED:-false}
       BINANCE_INGESTION_ENABLED: ${BINANCE_INGESTION_ENABLED:-true}
+      AEGIS_MARKET_SYMBOLS: ${AEGIS_MARKET_SYMBOLS:-BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,LINKUSDT}
+      AEGIS_MARKET_INTERVALS: ${AEGIS_MARKET_INTERVALS:-1m,3m,5m,15m,1h,4h}
     ports:
       - "8080:8080"
     healthcheck:

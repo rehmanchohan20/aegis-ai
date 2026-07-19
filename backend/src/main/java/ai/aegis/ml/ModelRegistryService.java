@@ -19,10 +19,12 @@ import java.net.URI;
 public class ModelRegistryService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
+    private final MlModelDeploymentClient deploymentClient;
 
-    public ModelRegistryService(JdbcTemplate jdbc, ObjectMapper mapper) {
+    public ModelRegistryService(JdbcTemplate jdbc, ObjectMapper mapper, MlModelDeploymentClient deploymentClient) {
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.deploymentClient = deploymentClient;
     }
 
     public ModelVersion register(String modelName, String version, Map<String, Object> metrics,
@@ -51,6 +53,7 @@ public class ModelRegistryService {
         ModelVersion candidate = get(id);
         if (!approved(id)) throw new IllegalStateException("Model has no passing deployment approval");
         verifyArtifact(candidate.artifactUri());
+        deploymentClient.activate(candidate.modelName(), candidate.version());
         ModelVersion previous = active(candidate.modelName());
         jdbc.update("UPDATE intelligence.model_registry SET status='RETIRED', retired_at=? WHERE model_name=? AND status='ACTIVE'",
                 Timestamp.from(Instant.now()), candidate.modelName());

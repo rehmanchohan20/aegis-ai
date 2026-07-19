@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: aegis
       POSTGRES_PASSWORD: aegis
     ports:
-      - "5432:5432"
+      - "${TIMESCALEDB_HOST_PORT:-5433}:5432"
     volumes:
       - timescale-data:/var/lib/postgresql/data
     healthcheck:
@@ -14,6 +14,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -22,6 +23,7 @@ services:
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
+    restart: unless-stopped
 
   ml-service:
     build:
@@ -30,6 +32,8 @@ services:
       - "8000:8000"
     volumes:
       - ml-models:/app/models
+    environment:
+      AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN: ${AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN:-local-model-deployment-approval}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -46,10 +50,13 @@ services:
       DB_USERNAME: aegis
       DB_PASSWORD: aegis
       ML_BASE_URL: http://ml-service:8000
+      AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN: ${AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN:-local-model-deployment-approval}
       AEGIS_VIEWER_API_KEY: ${AEGIS_VIEWER_API_KEY:-local-viewer-change-me}
       AEGIS_ADMIN_API_KEY: ${AEGIS_ADMIN_API_KEY:-local-admin-change-me}
       AEGIS_LIVE_EXECUTION_ENABLED: "false"
-      BINANCE_INGESTION_ENABLED: ${BINANCE_INGESTION_ENABLED:-false}
+      BINANCE_INGESTION_ENABLED: ${BINANCE_INGESTION_ENABLED:-true}
+      AEGIS_MARKET_SYMBOLS: ${AEGIS_MARKET_SYMBOLS:-BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,LINKUSDT}
+      AEGIS_MARKET_INTERVALS: ${AEGIS_MARKET_INTERVALS:-1m,3m,5m,15m,1h,4h}
     depends_on:
       timescaledb:
         condition: service_healthy

@@ -60,6 +60,17 @@ public class TradeJournalStore {
         ), limit);
     }
 
+    public void updateExecutionCosts(UUID tradeId, BigDecimal averageFillPrice, BigDecimal fees,
+                                     BigDecimal slippage, java.time.Instant fillTime) {
+        jdbc.update("""
+                UPDATE trading.trade_journal SET average_fill_price=?, fees=?, slippage=?, fill_time=?,
+                    order_submitted_at=COALESCE(order_submitted_at, opened_at),
+                    entry_signal_at=COALESCE(entry_signal_at, opened_at)
+                WHERE id=?
+                """, averageFillPrice, fees, slippage,
+                fillTime == null ? null : Timestamp.from(fillTime), tradeId);
+    }
+
     private String json(Object value) {
         if (value == null) return null;
         try { return mapper.writeValueAsString(value); }

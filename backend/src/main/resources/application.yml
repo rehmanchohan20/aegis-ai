@@ -24,14 +24,26 @@ logging:
     level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
 
 aegis:
+  market:
+    symbols: ${AEGIS_MARKET_SYMBOLS:BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,LINKUSDT}
+    intervals: ${AEGIS_MARKET_INTERVALS:1m,3m,5m,15m,1h,4h}
+    snapshot-interval-ms: ${AEGIS_MARKET_SNAPSHOT_INTERVAL_MS:1000}
   security:
     viewer-key: ${AEGIS_VIEWER_API_KEY:local-viewer-change-me}
     admin-key: ${AEGIS_ADMIN_API_KEY:local-admin-change-me}
   binance:
     enabled: ${BINANCE_INGESTION_ENABLED:true}
-    stream-url: ${BINANCE_STREAM_URL:wss://stream.binance.com:9443/ws/btcusdt@kline_1m}
+    stream-url: ${BINANCE_STREAM_URL:}
+    rest-url: ${BINANCE_REST_URL:https://api.binance.com}
+  automation:
+    enabled: ${AEGIS_AUTOMATION_ENABLED:true}
+    delay-ms: ${AEGIS_AUTOMATION_DELAY_MS:5000}
+  structure:
+    delay-ms: ${AEGIS_STRUCTURE_DELAY_MS:15000}
+    initial-delay-ms: ${AEGIS_STRUCTURE_INITIAL_DELAY_MS:20000}
   ml:
     base-url: ${ML_BASE_URL:http://localhost:8000}
+    deployment-approval-token: ${AEGIS_MODEL_DEPLOYMENT_APPROVAL_TOKEN:DISABLED}
     label-horizon-minutes: ${ML_LABEL_HORIZON_MINUTES:15}
     neutral-return-threshold: ${ML_NEUTRAL_RETURN_THRESHOLD:0.001}
     volatility-label-multiplier: ${ML_VOLATILITY_LABEL_MULTIPLIER:0.50}

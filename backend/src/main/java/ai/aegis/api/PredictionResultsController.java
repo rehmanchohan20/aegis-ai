@@ -33,4 +33,14 @@ public class PredictionResultsController {
                                               @RequestParam(defaultValue = "30") int days) {
         return auditService.rolling(modelVersion, days);
     }
+
+    @GetMapping("/performance")
+    public Map<String, Object> performance(@RequestParam(defaultValue = "500") int limit,
+                                           @RequestParam(required = false) String symbol,
+                                           @RequestParam(required = false) String timeframe,
+                                           @RequestParam(required = false) String regime,
+                                           @RequestParam(required = false) String strategyId,
+                                           @RequestParam(required = false) String modelVersion) {
+        return auditService.performance(limit, symbol, timeframe, regime, strategyId, modelVersion);
+    }
 }

@@ -3,6 +3,9 @@ package ai.aegis.dashboard;
 import ai.aegis.journal.PerformanceSummary;
 import ai.aegis.orchestration.DecisionCycleResult;
 import ai.aegis.paper.PaperTrade;
+import ai.aegis.market.MarketSnapshot;
+import ai.aegis.structure.MarketStructureSnapshot;
+import ai.aegis.analysis.MultiTimeframeDecision;
 
 import java.time.Instant;
 import java.util.List;
@@ -16,6 +19,9 @@ public record DashboardSnapshot(
         Map<String, Object> predictionSummary,
         List<Map<String, Object>> recentPredictions,
         ProductionInsightsService.Insights insights,
+        MarketSnapshot liveMarket,
+        MarketStructureSnapshot marketStructure,
+        MultiTimeframeDecision multiTimeframe,
         SafetyState safety,
         Instant generatedAt
 ) {

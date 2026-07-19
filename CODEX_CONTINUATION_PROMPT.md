@@ -9,7 +9,7 @@ You are the lead engineer continuing the AEGIS AI quantitative research and guar
 ## Repository and branch
 
 - Repository: `rehmanchohan20/aegis-ai`
-- Required branch: `sposprint/01-foundation`
+- Required branch: `sprint/01-foundation`
 - Work directly on this branch unless I explicitly request another branch.
 - Do not create a pull request.
 - Do not enable real-money trading.
@@ -20,6 +20,22 @@ You are the lead engineer continuing the AEGIS AI quantitative research and guar
 Take the current repository from its present state to a locally verified, reliable, explainable, drift-aware paper-trading and ML research platform. Run all builds and tests locally, fix every error you encounter, improve weak implementations, and leave the repository in a reproducible state.
 
 Do not merely describe changes. Inspect files, edit code, run commands, diagnose failures, rerun tests, and continue until the verification checklist is satisfied or a genuinely external blocker remains.
+
+## Merged real-time quantitative specification (authoritative)
+
+The platform is a serious multi-asset, multi-timeframe paper-trading and ML research system, not a candle-only demo. In addition to every requirement below, it must:
+
+- consume Binance public book ticker, aggregate trade, depth, and kline WebSocket streams for configurable pairs, maintain one-second snapshots, preserve exchange timestamps, measure latency, reject duplicate/out-of-order events, detect staleness, and reconnect/resubscribe with exponential backoff;
+- default to `BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,LINKUSDT` and `1m,3m,5m,15m,1h,4h`, with isolated state, higher-timeframe confirmation, pair ranking, broad risk regime, and correlation exposure controls;
+- calculate confirmed-pivot swing structure, HH/HL/LH/LL, BOS/ChoCH, support/resistance zones, regression trend lines with touch/break/confidence metadata, channels, consolidation, breakout/retest/false-breakout/liquidity-sweep/FVG warnings, and ATR bands, and render these using Lightweight Charts;
+- produce honest order-flow features (spread, microprice, depth imbalance, aggressive flow, CVD, trade intensity/size, realized volatility, impact/liquidity warnings) and explicitly mark unsupported, missing, or stale data;
+- use robust chronological feature engineering, calibrated ensemble direction probabilities, expected return/volatility, stop-first/target-first probability and trade-quality outputs, purged walk-forward validation, final chronological holdout, Brier/log-loss/ECE, reliability curves, per-class metrics, feature importance/stability/drift/redundancy, strict schema validation, and approval-gated activation/rollback;
+- combine rules, structure, regime, multiple timeframes, order flow, execution cost, portfolio risk, correlation risk, strategy/model health, and data quality. ML may only confirm or veto a rule signal and may never originate an order;
+- simulate persisted market/limit/stop/stop-limit orders, partial fills, book participation, spread, slippage, fees, rejection/cancellation/expiration, exposure and drawdown controls, and normalized prediction/strategy/model/trade attribution;
+- reconcile every prediction once using the first closed candle at/after its horizon, calculate path outcomes without inventing intrabar ordering, maintain rolling performance and drift snapshots, and fail closed when evidence, artifacts, health, or data are insufficient;
+- provide an authenticated SSE-backed command center with live prices, charts/overlays, structure, order flow, predictions, rankings, attribution, paper positions, health, freshness, loading, and non-JSON error handling.
+
+No fake/random runtime predictions, shuffled time-series validation, look-ahead features, hard-coded secrets, production order adapter, or real-money execution are permitted.
 
 ## Safety constraints
 

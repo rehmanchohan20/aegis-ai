@@ -1,6 +1,15 @@
-import { useMemo } from 'react';
+import { useEffect, useRef } from 'react';
+import {
+  CandlestickSeries,
+  ColorType,
+  createChart,
+  HistogramSeries,
+  LineSeries,
+  type IChartApi,
+  type UTCTimestamp,
+} from 'lightweight-charts';
 
-type Candle = {
+export type Candle = {
   openTime: string;
   open: number;
   high: number;
@@ -9,53 +18,101 @@ type Candle = {
   volume: number;
 };
 
-export function CandleChart({ candles }: { candles: Candle[] }) {
-  const geometry = useMemo(() => {
-    if (!candles.length) return null;
-    const width = 900;
-    const height = 420;
-    const padding = 34;
-    const visible = candles.slice(-80);
-    const high = Math.max(...visible.map((c) => c.high));
-    const low = Math.min(...visible.map((c) => c.low));
-    const range = Math.max(high - low, 0.000001);
-    const step = (width - padding * 2) / visible.length;
-    const y = (price: number) => padding + ((high - price) / range) * (height - padding * 2);
-    return { width, height, padding, visible, high, low, step, y };
-  }, [candles]);
+export type TrendLine = {
+  type: string;
+  startTime: string;
+  startPrice: number;
+  endTime: string;
+  endPrice: number;
+  breakStatus: string;
+  confirmedTouches: number;
+  confidenceScore: number;
+};
 
-  if (!geometry) {
-    return <div className="chart-empty">Collecting candles for the live chart…</div>;
-  }
+export type MarketStructure = {
+  structureState: string;
+  regime: string;
+  supportPrice: number | null;
+  resistancePrice: number | null;
+  atrUpperBand: number | null;
+  atrLowerBand: number | null;
+  trendLines: TrendLine[];
+};
 
-  const { width, height, padding, visible, high, low, step, y } = geometry;
-  return (
-    <div className="chart-wrap">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="BTC candlestick chart">
-        {[0, 1, 2, 3, 4].map((line) => {
-          const lineY = padding + (line * (height - padding * 2)) / 4;
-          const price = high - (line * (high - low)) / 4;
-          return (
-            <g key={line}>
-              <line className="grid-line" x1={padding} x2={width - padding} y1={lineY} y2={lineY} />
-              <text className="axis-label" x={width - padding + 4} y={lineY + 4}>{price.toFixed(2)}</text>
-            </g>
-          );
-        })}
-        {visible.map((candle, index) => {
-          const x = padding + index * step + step / 2;
-          const bullish = candle.close >= candle.open;
-          const bodyTop = y(Math.max(candle.open, candle.close));
-          const bodyBottom = y(Math.min(candle.open, candle.close));
-          return (
-            <g key={`${candle.openTime}-${index}`} className={bullish ? 'candle bullish' : 'candle bearish'}>
-              <line x1={x} x2={x} y1={y(candle.high)} y2={y(candle.low)} />
-              <rect x={x - Math.max(step * 0.28, 1)} y={bodyTop}
-                    width={Math.max(step * 0.56, 2)} height={Math.max(bodyBottom - bodyTop, 1)} />
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
+function time(value: string): UTCTimestamp {
+  return Math.floor(new Date(value).getTime() / 1000) as UTCTimestamp;
+}
+
+function ema(candles: Candle[], period: number): Array<{ time: UTCTimestamp; value: number }> {
+  const alpha = 2 / (period + 1);
+  let current = candles[0]?.close ?? 0;
+  return candles.map((candle) => {
+    current = alpha * candle.close + (1 - alpha) * current;
+    return { time: time(candle.openTime), value: current };
+  });
+}
+
+function vwap(candles: Candle[]): Array<{ time: UTCTimestamp; value: number }> {
+  let valueVolume = 0;
+  let totalVolume = 0;
+  return candles.map((candle) => {
+    valueVolume += ((candle.high + candle.low + candle.close) / 3) * candle.volume;
+    totalVolume += candle.volume;
+    return { time: time(candle.openTime), value: totalVolume > 0 ? valueVolume / totalVolume : candle.close };
+  });
+}
+
+export function CandleChart({ candles, symbol, structure }: { candles: Candle[]; symbol: string; structure: MarketStructure | null }) {
+  const container = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!container.current || candles.length === 0) return;
+    const chart: IChartApi = createChart(container.current, {
+      autoSize: true,
+      height: 500,
+      layout: { background: { type: ColorType.Solid, color: '#07111f' }, textColor: '#8298b8' },
+      grid: { vertLines: { color: 'rgba(154,180,215,.07)' }, horzLines: { color: 'rgba(154,180,215,.1)' } },
+      rightPriceScale: { borderColor: 'rgba(154,180,215,.18)' },
+      timeScale: { borderColor: 'rgba(154,180,215,.18)', timeVisible: true, secondsVisible: false },
+      crosshair: { vertLine: { color: '#466381' }, horzLine: { color: '#466381' } },
+    });
+    const price = chart.addSeries(CandlestickSeries, {
+      upColor: '#55e6c1', downColor: '#ff6b7a', wickUpColor: '#55e6c1', wickDownColor: '#ff6b7a', borderVisible: false,
+    });
+    price.setData(candles.map((candle) => ({ time: time(candle.openTime), open: candle.open, high: candle.high, low: candle.low, close: candle.close })));
+    const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'volume' });
+    volume.priceScale().applyOptions({ scaleMargins: { top: .82, bottom: 0 } });
+    volume.setData(candles.map((candle) => ({ time: time(candle.openTime), value: candle.volume, color: candle.close >= candle.open ? 'rgba(85,230,193,.25)' : 'rgba(255,107,122,.25)' })));
+    const addLine = (data: Array<{ time: UTCTimestamp; value: number }>, color: string, width: 1 | 2 = 1, style = 0) => {
+      const series = chart.addSeries(LineSeries, { color, lineWidth: width, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      series.setData(data);
+      return series;
+    };
+    addLine(ema(candles, 20), '#55a7ff', 2);
+    addLine(ema(candles, 50), '#bb86fc', 2);
+    addLine(vwap(candles), '#ffbe5c', 1);
+    const first = time(candles[0].openTime);
+    const last = time(candles[candles.length - 1].openTime);
+    const horizontal = (value: number | null, color: string, style: number) => {
+      if (value != null && Number.isFinite(value)) addLine([{ time: first, value }, { time: last, value }], color, 1, style);
+    };
+    horizontal(structure?.supportPrice ?? null, '#55e6c1', 2);
+    horizontal(structure?.resistancePrice ?? null, '#ff6b7a', 2);
+    horizontal(structure?.atrUpperBand ?? null, '#ffbe5c', 3);
+    horizontal(structure?.atrLowerBand ?? null, '#ffbe5c', 3);
+    structure?.trendLines.slice(0, 8).forEach((line) => {
+      const broken = line.breakStatus !== 'ACTIVE';
+      addLine([
+        { time: time(line.startTime), value: line.startPrice },
+        { time: time(line.endTime), value: line.endPrice },
+      ], broken ? '#60738e' : line.type === 'SUPPORT' ? '#55e6c1' : '#ff6b7a', line.confidenceScore >= .7 ? 2 : 1, broken ? 2 : 0);
+    });
+    chart.timeScale().fitContent();
+    const resize = new ResizeObserver(() => chart.applyOptions({ width: container.current?.clientWidth ?? 800 }));
+    resize.observe(container.current);
+    return () => { resize.disconnect(); chart.remove(); };
+  }, [candles, structure]);
+
+  if (candles.length === 0) return <div className="chart-empty">Collecting validated candles for {symbol}...</div>;
+  return <div className="chart-wrap" ref={container} aria-label={`${symbol} candlestick chart with EMA, VWAP, ATR, support, resistance, and validated trend lines`} />;
 }
